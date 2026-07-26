@@ -5,17 +5,17 @@
 | **Version** | 1.0 |
 | **Status** | Authored. |
 | **Stability** | Stable in philosophy (PostgreSQL as sole system of record, Redis as non-authoritative acceleration — Principles 4.2/4.3); evolving in mechanism as load patterns become real (caching scope, reconciliation cadence, archival timing). |
-| **Authority** | Subordinate to `00-Architecture-Principles.md`, `01-Architecture-Design-Specification.md`, `02-Architecture-Decisions.md`, `03-System-Context.md`, `04-Technology-Stack.md`, and `03-decomposition/module-catalog.md` / `module-communication.md`. Does not repeat their content — see Section 2. |
+| **Authority** | Subordinate to `00-Architecture-Principles.md`, `01-Architecture-Design-Specification.md`, `decisions/README.md`, `02-context/system-context.md`, `04-cross-cutting/technology-decisions.md`, and `03-decomposition/module-catalog.md` / `module-communication.md`. Does not repeat their content — see Section 2. |
 
 ## 1. Purpose, Scope, and Intended Audience
 
 **Purpose.** Describes how data is actually treated across the whole system: what PostgreSQL and Redis are each for, who owns what, how transactions and concurrency are handled, and the specific data-level conventions (the inventory model, the ledger, soft deletes, ULIDs, UTC, money representation) every module's persistence must follow. Where `module-catalog.md` says *which module owns which entity* and `module-communication.md` says *how modules avoid sharing a transaction*, this document says *how data itself is modeled and protected* underneath all of that.
 
-**Scope.** This document covers system-wide data philosophy and conventions that apply across every module. It does not cover: per-module dependency/communication rules (`06-Module-Communication.md`); authentication/session data mechanics (`08-Security-Architecture.md`); event payload structure (`09-Event-Architecture.md`); infrastructure-level backup, point-in-time recovery, or disaster-recovery topology (`10-Deployment-Architecture.md` — this document's own "Recovery Strategy," Section 15, is about data-level recovery mechanisms, not infrastructure DR); or any schema, SQL, or implementation detail, all of which belong to future module SDDs.
+**Scope.** This document covers system-wide data philosophy and conventions that apply across every module. It does not cover: per-module dependency/communication rules (`03-decomposition/module-communication.md`); authentication/session data mechanics (`04-cross-cutting/security-and-compliance.md`); event payload structure (`04-cross-cutting/integration-and-messaging.md`); infrastructure-level backup, point-in-time recovery, or disaster-recovery topology (`05-deployment/infrastructure-and-release.md` — this document's own "Recovery Strategy," Section 15, is about data-level recovery mechanisms, not infrastructure DR); or any schema, SQL, or implementation detail, all of which belong to future module SDDs.
 
 **Intended audience.** The project owner, an AI coding assistant designing or reviewing a module's schema or persistence code, and the author of any future module SDD, for whom this document's conventions are non-negotiable defaults, not per-module choices to reconsider.
 
-**Cross-references.** Grounded in Principles 4.1–4.3, 4.9, and 4.10; ADR-0003 (PostgreSQL), ADR-0004 (Redis), ADR-0009 (Module Ownership), ADR-0010 (Transactional Checkout), ADR-0014 (UTC), ADR-0015 (Integer Halala Money), and ADR-0019 (ULIDs). `04-Technology-Stack.md`'s PostgreSQL and Redis entries cover *why* those technologies were chosen and their alternatives — this document does not repeat that, only how they're used architecturally. `module-communication.md` Section 8 covers *cross-module* transaction orchestration; Section 6 below covers the transaction mechanism itself, within a single module's boundary.
+**Cross-references.** Grounded in Principles 4.1—4.3, 4.9, and 4.10; ADR-0003 (PostgreSQL), ADR-0004 (Redis), ADR-0009 (Module Ownership), ADR-0010 (Transactional Checkout), ADR-0014 (UTC), ADR-0015 (Integer Halala Money), and ADR-0019 (ULIDs). `04-cross-cutting/technology-decisions.md`'s PostgreSQL and Redis entries cover *why* those technologies were chosen and their alternatives — this document does not repeat that, only how they're used architecturally. `module-communication.md` Section 8 covers *cross-module* transaction orchestration; Section 6 below covers the transaction mechanism itself, within a single module's boundary.
 
 ## 2. PostgreSQL Philosophy
 
@@ -79,7 +79,7 @@ Soft deletes and hard deletes are used for different kinds of entities, and the 
 
 ## 10. ULIDs
 
-Every entity's primary identifier is a ULID (ADR-0019), applied uniformly across all fifteen modules' owned tables. This document does not repeat ADR-0019's rationale (non-sequential identifiers avoiding business-volume leakage, combined with lexicographic sortability by creation time) — what matters here is the practical consequence: every table's `id` column follows this one convention with no exceptions, which is what keeps cross-module event payloads (`09-Event-Architecture.md`), audit log references (Section 12), and log correlation all working against the same identifier scheme without translation.
+Every entity's primary identifier is a ULID (ADR-0019), applied uniformly across all sixteen modules' owned tables. This document does not repeat ADR-0019's rationale (non-sequential identifiers avoiding business-volume leakage, combined with lexicographic sortability by creation time) — what matters here is the practical consequence: every table's `id` column follows this one convention with no exceptions, which is what keeps cross-module event payloads (`04-cross-cutting/integration-and-messaging.md`), audit log references (Section 12), and log correlation all working against the same identifier scheme without translation.
 
 ## 11. UTC Time Storage
 
@@ -104,17 +104,17 @@ Concurrency correctness rests on four mechanisms working together (DDD Section 1
 
 ## 14. Recovery Strategy
 
-This section covers data-level recovery — how the system recovers from a failed or interrupted business operation using its own data model — not infrastructure-level backup or disaster recovery, which is `10-Deployment-Architecture.md`'s subject. Three mechanisms carry this weight:
+This section covers data-level recovery — how the system recovers from a failed or interrupted business operation using its own data model — not infrastructure-level backup or disaster recovery, which is `05-deployment/infrastructure-and-release.md`'s subject. Three mechanisms carry this weight:
 
 - **Compensating actions**, per `module-communication.md` Section 8: when an orchestrated, multi-module operation fails partway (the clearest case being inventory reservation failing after an order record was created), the orchestrating module performs an explicit compensating action rather than relying on a cross-module transaction rollback that doesn't exist by design.
 - **Reconciliation jobs**, which recover from discrepancies that were never caught synchronously: Inventory Reconciliation (DDD Section 15.4) supports daily closing workflows and flags mismatches for review before they become silent data drift; Shift Reconciliation (DDD Section 9.9, 15.5) prevents a shift from closing until cash/card discrepancies are explicitly resolved or flagged, rather than assuming everything balanced.
 - **The ledger and audit trail themselves** (Sections 8, and Section 12 below) are a recovery mechanism in the broadest sense: when something does go wrong, the durable record of what happened — not memory, not inference from current state — is what allows the discrepancy to be diagnosed and corrected, consistent with Principle 4.10's reasoning that auditability exists specifically so incidents are resolvable from evidence.
 
-**Explicit non-goal:** this document does not define recovery point/recovery time objectives (RPO/RTO), backup frequency, or point-in-time restore procedures — those are properties of how PostgreSQL is deployed and operated, which `10-Deployment-Architecture.md` is responsible for.
+**Explicit non-goal:** this document does not define recovery point/recovery time objectives (RPO/RTO), backup frequency, or point-in-time restore procedures — those are properties of how PostgreSQL is deployed and operated, which `05-deployment/infrastructure-and-release.md` is responsible for.
 
 ## 15. Audit Data Flow
 
-Briefly, because Section 12 (Audit module, `module-catalog.md`) and full event mechanics belong elsewhere: each domain module is responsible for emitting audit-worthy context when it performs a sensitive change (DDD Section 12.1) — a **push model**, not Audit broadly subscribing to every event in the system. Audit entries capture actor, action, affected entity, store context where applicable, before/after values for meaningful changes, and a reason code where required (DDD Section 12.2). This resolves part of `module-communication.md`'s Open Decisions note on Audit's invocation mechanism — the push model is confirmed by the DDD; the remaining open question is only whether that push is a direct synchronous call or a dedicated event, left to `09-Event-Architecture.md`.
+Briefly, because Section 12 (Audit module, `module-catalog.md`) and full event mechanics belong elsewhere: each domain module is responsible for emitting audit-worthy context when it performs a sensitive change (DDD Section 12.1) — a **push model**, not Audit broadly subscribing to every event in the system. Audit entries capture actor, action, affected entity, store context where applicable, before/after values for meaningful changes, and a reason code where required (DDD Section 12.2). This resolves part of `module-communication.md`'s Open Decisions note on Audit's invocation mechanism — the push model is confirmed by the DDD; the remaining open question is only whether that push is a direct synchronous call or a dedicated event, left to `04-cross-cutting/integration-and-messaging.md`.
 
 ## 16. Trade-offs and Future Evolution
 
@@ -125,6 +125,7 @@ Briefly, because Section 12 (Audit module, `module-catalog.md`) and full event m
 ## 17. Open Decisions
 
 - **Deadlock avoidance ordering:** the DDD (Section 10.7) explicitly does not define a consistent entity-update order for multi-entity transactions and states that "later implementation must document it for inventory/order/payment workflows." This document does not resolve it either — it is flagged here as outstanding work for whichever module's SDD first needs it (most likely Order or Inventory).
-- **Audit's push mechanism** (direct synchronous call vs. dedicated event) — narrowed by Section 15 above to "a push model" but not fully resolved; left to `09-Event-Architecture.md`.
+- **Audit's push mechanism** (direct synchronous call vs. dedicated event) — narrowed by Section 15 above to "a push model" but not fully resolved; left to `04-cross-cutting/integration-and-messaging.md`.
 - **Archival timing and thresholds** (DDD Section 11.4) are explicitly deferred pending real usage data — not a gap in this document, but a genuinely not-yet-decidable point.
-- Retention/purge specifics per DDD Section 11.5–11.6 (exact retention windows, anonymization triggers) are named in category but not given exact durations anywhere in the approved documents — a candidate for a future ADR once legal/accounting review (DDD Section 11.6) actually happens.
+- Retention/purge specifics per DDD Section 11.5—11.6 (exact retention windows, anonymization triggers) are named in category but not given exact durations anywhere in the approved documents — a candidate for a future ADR once legal/accounting review (DDD Section 11.6) actually happens.
+

@@ -1,11 +1,11 @@
-# Environment Strategy — Sakhari Ecom
+﻿# Environment Strategy — Sakhari Ecom
 
 | | |
 |---|---|
 | **Version** | 1.0 |
 | **Status** | Authored. |
 | **Stability** | Stable — the environment list and promotion path are expected to hold for the life of the project; what evolves underneath them is captured in `infrastructure-and-release.md`, not here. |
-| **Authority** | Subordinate to `00-Architecture-Principles.md`, `01-Architecture-Design-Specification.md`, `02-Architecture-Decisions.md`, `03-System-Context.md`, `04-Technology-Stack.md`, and `04-cross-cutting/security-and-compliance.md` (for secrets handling per environment). |
+| **Authority** | Subordinate to `00-Architecture-Principles.md`, `01-Architecture-Design-Specification.md`, `decisions/README.md`, `02-context/system-context.md`, `04-cross-cutting/technology-decisions.md`, and `04-cross-cutting/security-and-compliance.md` (for secrets handling per environment). |
 
 ## 1. Purpose, Scope, and Intended Audience
 
@@ -15,7 +15,7 @@
 
 **Intended audience.** The project owner and any AI coding assistant configuring environment-specific behavior (which payment gateway mode to call, which log verbosity to use) — this document is the source of truth for "what environment am I in and what does that mean," not something to redefine per feature.
 
-**Cross-references.** Grounded in the Constitution's operational-simplicity design goal and one-developer constraint (Section 5, Section 7); `03-System-Context.md`'s external systems (Payment Gateway, SMS/OTP Provider, Push Notification Service, Geocoding Provider), each of which behaves differently by environment (Section 3 below); `security-and-compliance.md` Section 10 (secrets).
+**Cross-references.** Grounded in the Constitution's operational-simplicity design goal and one-developer constraint (Section 5, Section 7); `02-context/system-context.md`'s external systems (Payment Gateway, SMS/OTP Provider, Push Notification Service, Geocoding Provider), each of which behaves differently by environment (Section 3 below); `security-and-compliance.md` Section 10 (secrets).
 
 ## 2. Environment List
 
@@ -50,3 +50,4 @@ Code moves Development → Staging → Production, in that order, with no enviro
 
 - **Exact Staging data refresh/anonymization process** (how synthetic or anonymized data gets into Staging, and how often) is not decided here — an operational procedure, not an architectural one, best defined once real production data volume exists to anonymize from.
 - **Whether Development is strictly local-per-developer or includes a shared cloud-hosted development environment** is not decided — moot at a one-developer team size today, worth revisiting only if the team grows (Constitution Section 13).
+

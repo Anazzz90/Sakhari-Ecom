@@ -4,23 +4,23 @@
 |---|---|
 | **Version** | 1.0 |
 | **Status** | Authored. Supersedes the aggregate-table scope of `capability-boundary-map.md`, `service-decomposition.md`, and `data-ownership-map.md` as the primary, per-module source of truth; those three documents, once authored, should summarize and cross-reference this catalog rather than duplicate it. |
-| **Stability** | Evolving in detail (a module's public interface or event list can grow); stable in shape (15 modules, one deployable, per `00-Architecture-Principles.md` and `01-Architecture-Design-Specification.md`). Reassigning a module's *ownership boundary* is a high-blast-radius change and should be ADR-backed. |
-| **Authority** | Subordinate to `00-Architecture-Principles.md`, `01-Architecture-Design-Specification.md`, `02-Architecture-Decisions.md` (the ADR set), `03-System-Context.md`, and `04-Technology-Stack.md`. Never contradicts them. Where this catalog had to make an assignment those documents don't settle, it is recorded in the **Open Decisions** section (Section 3) rather than asserted as fact. |
+| **Stability** | Evolving in detail (a module's public interface or event list can grow); stable in shape (16 modules, one deployable, per `00-Architecture-Principles.md`, `01-Architecture-Design-Specification.md`, and ADR-0020). Reassigning a module's *ownership boundary* is a high-blast-radius change and should be ADR-backed. |
+| **Authority** | Subordinate to `00-Architecture-Principles.md`, `01-Architecture-Design-Specification.md`, `decisions/README.md` (the ADR set), `02-context/system-context.md`, and `04-cross-cutting/technology-decisions.md`. Never contradicts them. ADR-0020 resolves the module ownership reconciliation that earlier drafts left open. |
 
 ## 1. Purpose, Scope, and Intended Audience
 
-**Purpose.** This is the authoritative catalog of the fifteen backend modules that make up the Sakhari Ecom modular monolith. For every module, it states what the module is responsible for, where its boundary sits, what it owns, how other modules are allowed to reach it, what it must never depend on, what events it produces and consumes, and how it is expected to grow. It exists so that a question like "can the Cart module read a Product row directly?" or "does Delivery own rider location data?" has one place to be answered definitively, instead of being re-derived from the Domain Design Document (DDD) or the Software Requirements Document (SRD) each time.
+**Purpose.** This is the authoritative catalog of the sixteen backend modules that make up the Sakhari Ecom modular monolith. For every module, it states what the module is responsible for, where its boundary sits, what it owns, how other modules are allowed to reach it, what it must never depend on, what events it produces and consumes, and how it is expected to grow. It exists so that a question like "can the Cart module read a Product row directly?" or "does Delivery own rider location data?" has one place to be answered definitively, instead of being re-derived from the Database Design Document (DDD) or the Software Requirements Document (SRD) each time.
 
 **Scope.** This document covers module-level boundaries and responsibilities only. It does not cover:
-- *How* modules communicate mechanically (REST conventions, internal call patterns, transaction boundaries across modules) — that is `06-Module-Communication.md`.
-- Database schema, table structure, or persistence mechanics — that is `07-Data-Architecture.md`.
-- Security mechanisms (JWT, OTP, RBAC internals) beyond noting which module owns them — that is `08-Security-Architecture.md`.
-- Event payload structure, retry, or delivery mechanics beyond naming what's published/consumed — that is `09-Event-Architecture.md`.
+- *How* modules communicate mechanically (REST conventions, internal call patterns, transaction boundaries across modules) — that is `03-decomposition/module-communication.md`.
+- Database schema, table structure, or persistence mechanics — that is `04-cross-cutting/data-architecture.md`.
+- Security mechanisms (JWT, OTP, RBAC internals) beyond noting which module owns them — that is `04-cross-cutting/security-and-compliance.md`.
+- Event payload structure, retry, or delivery mechanics beyond naming what's published/consumed — that is `04-cross-cutting/integration-and-messaging.md`.
 - Any implementation detail: no code, no class names, no file structure. "Public Interfaces" below are named capabilities, not method signatures.
 
 **Intended audience.** Anyone extending, reviewing, or reasoning about the backend: the project owner, an AI coding assistant generating or reviewing code against a specific module, and the author of any future Software Design Document (SDD) for a given module. A future SDD for a module should treat that module's entry here as its starting boundary, not something it renegotiates.
 
-**Cross-references.** This document realizes `01-Architecture-Design-Specification.md` Section 10 (Module Overview) and Section 7 (High-Level Architecture) at full granularity, and is built on `02-Architecture-Decisions.md`'s ADR-0002 (Modular Monolith), ADR-0009 (Module Ownership and No Cross-Module Repository Access), ADR-0010 (Transactional Checkout and Inventory Reservation), and ADR-0011 (Event-Driven Asynchronous Side Effects). It draws its entity-ownership grounding from the DDD's Entity Catalog (Section 4) and Transaction Boundaries (Section 9), reconciled where the two disagree — see Section 3.
+**Cross-references.** This document realizes `01-Architecture-Design-Specification.md` Section 10 (Module Overview) and Section 7 (High-Level Architecture) at full granularity, and is built on `decisions/README.md`'s ADR-0002 (Modular Monolith), ADR-0009 (Module Ownership and No Cross-Module Repository Access), ADR-0010 (Transactional Checkout and Inventory Reservation), and ADR-0011 (Event-Driven Asynchronous Side Effects). It draws its entity-ownership grounding from the DDD's Entity Catalog (Section 4) and Transaction Boundaries (Section 9), reconciled where the two disagree — see Section 3.
 
 ---
 
@@ -33,26 +33,27 @@ Every module below is documented with the same ten fields, in the same order:
 - **Ownership** — the DDD entities this module is the source of truth for (Principle 4.5).
 - **Public Interfaces** — the named operations other modules and the API layer may invoke. Every module is reached only through its public interface, never through a direct data access (ADR-0009). All are exposed externally via REST (per the confirmed REST API decision) through thin controllers (Principle 4.7); the same operations are what an internal caller uses for synchronous, transactional cross-module calls (ADR-0010).
 - **Dependencies** — which other modules this module is allowed to call synchronously, and why.
-- **Forbidden Dependencies** — which modules this module must never call, to prevent circular dependencies and to keep the dependency graph flowing in one direction. The full graph and its enforcement is `06-Module-Communication.md`'s subject; each entry here states only this module's own rule.
-- **Published Events** — domain events this module raises for others to consume asynchronously (ADR-0011), following the `<Entity><PastTenseVerb>` naming convention used consistently across this catalog (e.g. `OrderPlaced`); full event architecture is `09-Event-Architecture.md`'s subject.
+- **Forbidden Dependencies** — which modules this module must never call, to prevent circular dependencies and to keep the dependency graph flowing in one direction. The full graph and its enforcement is `03-decomposition/module-communication.md`'s subject; each entry here states only this module's own rule.
+- **Published Events** — domain events this module raises for others to consume asynchronously (ADR-0011), following the `<Entity><PastTenseVerb>` naming convention used consistently across this catalog (e.g. `OrderPlaced`); full event architecture is `04-cross-cutting/integration-and-messaging.md`'s subject.
 - **Consumed Events** — domain events this module reacts to.
 - **Data Ownership** — restates Ownership as a plain entity list for quick scanning, consistent with the eventual `data-ownership-map.md`.
 - **Future Expansion** — how this module is expected to grow, and, where relevant, its path to independent-service extraction without a change to its business logic (Constitution Section 13; `01-Architecture-Design-Specification.md` Section 15).
 
 ---
 
-## 3. Open Decisions
+## 3. Module Ownership Reconciliation
 
-Before the catalog: the fifteen-module list given for this task does not fully match the DDD's nineteen-module-owner breakdown (DDD Section 4, Entity Catalog) or the ADS's nine-capability grouping (`01-Architecture-Design-Specification.md` Section 10). Per this task's own instruction, these gaps are recorded here rather than resolved by silent assumption. Every assumption below was necessary to produce a complete catalog and is used consistently throughout Section 4, but **none of it should be read as a settled architectural decision** until reconciled — ideally by a dedicated ADR that formally supersedes or amends ADR-0009's module list and updates `capability-boundary-map.md` accordingly.
+ADR-0020 resolves the mismatch earlier drafts flagged between the DDD's entity-owner breakdown, the ADS's coarse capability grouping, and this catalog's backend module list. The settled backend catalog contains sixteen modules. The ownership decisions are:
 
-1. **DDD's "Support" module has no home in the fifteen-module list.** Support Ticket and Support Ticket Comment (DDD Sections 5.34–5.35) are not assigned anywhere in this catalog. Candidates: fold into User (support is closely tied to the customer/worker relationship), fold into Order (most tickets are order-scoped), or reinstate Support as a sixteenth module. **Not assigned below — flagged as unresolved**, not defaulted.
-2. **DDD's "Refund" module is assumed folded into Payment.** Refund (DDD Section 5.28) has no separate owner in the fifteen-module list; this catalog assigns it to Payment on the reasoning that a refund is a payment-reversal operation. Needs confirmation.
-3. **DDD's "Picking" module is assumed folded into Delivery.** Picking Session and Picking Session Item (DDD Sections 5.20–5.21) have no separate owner; this catalog assigns them to Delivery, reasoning that the ADS's original capability grouping (`01-Architecture-Design-Specification.md` Section 10, "Dispatch & Fulfillment") already combined picking and delivery into one capability. This is the lowest-risk assumption in this list, but is still a naming/ownership choice, not a restated fact.
-4. **DDD's "Workforce" module is assumed folded into User.** Worker Profile, Worker Capability, Shift, and Worker Availability (DDD Sections 5.6–5.8, and Worker Availability referenced in Section 4) have no separate owner; this catalog assigns them to User alongside Customer Profile and Address, reasoning that User is the natural home for actor-profile data generally. Needs confirmation.
-5. **DDD's "Pricing" module is assumed folded into Order, not Promotion.** Price Snapshot (DDD Section 5.32) is scoped by the DDD itself as "Order/item-scoped," which this catalog reads as closer to Order's ownership than Promotion's — but the ADS's original capability grouping paired pricing with promotions ("Pricing & Promotions"). This catalog picked Order; the alternative (Promotion) is equally defensible and unresolved.
-6. **The Auth/User split is assumed, not confirmed.** The DDD's Entity Catalog assigns the User entity itself (Section 5.1) to a single "Auth & Identity" module. The fifteen-module list splits this into two modules (Auth, User); this catalog assumes Auth owns the core identity/credential record (the DDD's User entity, sessions, tokens) while the User module owns profile/extension data (Customer Profile, Address, and the folded-in Workforce entities per point 4 above). This split is architecturally reasonable and common in practice, but it is this catalog's interpretation, not a documented decision.
-7. **Search is an entirely new module with no DDD or ADS precedent.** It owns no primary entity — see its entry in Section 4 for how this catalog reconciles that with Principle 4.5. Its introduction as a backend module is itself a decision with no backing ADR yet.
-8. **The fifteen-module list as a whole has not been reconciled against `capability-boundary-map.md`,** which remains an unauthored skeleton. Once authored, that document should either adopt this catalog's fifteen-module breakdown formally (closing points 1–7 above) or record a different resolution — but it should not be authored independently of this catalog without addressing these seven open points first.
+1. **Support is a dedicated module.** Support Ticket and Support Ticket Comment belong to Support.
+2. **Refund is folded into Payment.** Refund is treated as a payment-reversal operation.
+3. **Picking is folded into Delivery.** Picking Session and Picking Session Item belong to the fulfillment boundary.
+4. **Workforce is folded into User.** Worker Profile, Worker Capability, Shift, and Worker Availability belong to User.
+5. **Pricing snapshot ownership belongs to Order.** Price Snapshot is an order-time fact, not a promotion rule.
+6. **Auth/User split is settled.** Auth owns identity/session/token concerns; User owns profile/workforce concerns.
+7. **Search is an accepted derived-read module.** It owns no authoritative business entity, only a rebuildable index.
+
+`capability-boundary-map.md`, `service-decomposition.md`, and `data-ownership-map.md` should summarize this catalog and ADR-0020 when authored, not re-open these decisions.
 
 ---
 
@@ -62,13 +63,13 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 **Responsibilities:** Owns authentication for every actor in the system — customers, workers, and admin/ops/support staff. Issues and validates JWTs, manages refresh-token lifecycle, and orchestrates OTP-based login (request code, verify code, establish session). Is the single point every other module and every client ultimately depends on, directly or indirectly, to know who is calling.
 
-**Boundaries:** Does not own actor profile data (name, address, worker capability) — that is User's job. Does not decide *what* an authenticated actor is allowed to do beyond proving identity and carrying role/permission claims for RBAC to evaluate — permission logic itself belongs to the security model documented in `08-Security-Architecture.md`, evaluated centrally but not "owned" by any single business module. Does not send the OTP SMS itself — it requests delivery through Notification, which owns the actual SMS/OTP provider integration named in `03-System-Context.md`.
+**Boundaries:** Does not own actor profile data (name, address, worker capability) — that is User's job. Does not decide *what* an authenticated actor is allowed to do beyond proving identity and carrying role/permission claims for RBAC to evaluate — permission logic itself belongs to the security model documented in `04-cross-cutting/security-and-compliance.md`, evaluated centrally but not "owned" by any single business module. Does not send the OTP SMS itself — it requests delivery through Notification, which owns the actual SMS/OTP provider integration named in `02-context/system-context.md`.
 
 **Ownership:** The DDD's User entity (Section 5.1) — the core identity/credential record — plus session and refresh-token state, which are Auth-internal and not separately named in the DDD.
 
 **Public Interfaces:** RequestOtp, VerifyOtp, IssueTokenPair, RefreshAccessToken, RevokeSession, ValidateToken (used internally by every other module's request-handling path, not called by clients directly).
 
-**Dependencies:** Notification (to request OTP delivery — Auth never talks to the SMS/OTP provider directly, consistent with `03-System-Context.md`'s rule that external systems are reached only through their owning module).
+**Dependencies:** Notification (to request OTP delivery — Auth never talks to the SMS/OTP provider directly, consistent with `02-context/system-context.md`'s rule that external systems are reached only through their owning module).
 
 **Forbidden Dependencies:** Every business-facing module (Order, Payment, Cart, Catalog, Inventory, Delivery, Promotion). Auth sits at the foundation of the dependency graph; nothing about identity or session state should ever require knowing anything about a business capability.
 
@@ -84,7 +85,7 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 ### 4.2 User
 
-**Responsibilities:** Owns profile data for both customer and worker actors: customer profile and saved addresses, and worker profile, capability, shift, and availability data (per Open Decision 4). Is the source of truth for "who this person is" beyond bare authentication.
+**Responsibilities:** Owns profile data for both customer and worker actors: customer profile and saved addresses, and worker profile, capability, shift, and availability data (per ADR-0020). Is the source of truth for "who this person is" beyond bare authentication.
 
 **Boundaries:** Does not authenticate anyone — that's Auth. Does not decide worker task eligibility for a specific delivery or picking assignment — that's Delivery's job, informed by data User exposes (capability, shift status) through User's public interface, not by Delivery reading User's tables directly.
 
@@ -102,7 +103,7 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 **Data Ownership:** Customer Profile, Address, Worker Profile, Worker Capability, Shift, Worker Availability.
 
-**Future Expansion:** Likely to be split further only if worker-profile concerns grow substantially distinct from customer-profile concerns at real scale (e.g., a dedicated Workforce module re-emerging, resolving Open Decision 4 in the other direction) — not anticipated at launch scale.
+**Future Expansion:** Likely to be split further only if worker-profile concerns grow substantially distinct from customer-profile concerns at real scale (e.g., a dedicated Workforce module re-emerging through a future ADR) — not anticipated at launch scale.
 
 ---
 
@@ -174,7 +175,7 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 **Data Ownership:** None (derived index only — see Boundaries).
 
-**Future Expansion:** The natural home for a dedicated search technology (e.g., a specialized search engine) should evidence ever justify one — because it owns no authoritative data, introducing such a technology behind Search's interface is a self-contained change that does not touch Principle 4.2's PostgreSQL-as-system-of-record guarantee anywhere else in the system. No dedicated ADR exists yet for Search's introduction as a module at all — flagged in Open Decisions (Section 3, point 7).
+**Future Expansion:** The natural home for a dedicated search technology (e.g., a specialized search engine) should evidence ever justify one — because it owns no authoritative data, introducing such a technology behind Search's interface is a self-contained change that does not touch Principle 4.2's PostgreSQL-as-system-of-record guarantee anywhere else in the system. Search's existence as a module is accepted by ADR-0020.
 
 ---
 
@@ -194,7 +195,7 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 **Published Events:** `InventoryReserved`, `InventoryReservationFailed`, `InventoryReservationReleased`, `InventoryLevelChanged`, `InventoryLedgerRecorded`.
 
-**Consumed Events:** `OrderPlaced` is explicitly **not** consumed synchronously here — per the confirmed sequencing ("Inventory Reservation after Place Order"), Order calls Inventory's `ReserveStock` interface directly and synchronously as the next step in its own checkout orchestration (see Section 4.8's Boundaries), rather than Inventory reacting to a published event after the fact. This keeps reservation failure synchronously reportable back to the checkout flow rather than discovered asynchronously. See Open Decisions for the reconciliation this implies against ADR-0010's exact wording.
+**Consumed Events:** `OrderPlaced` is explicitly **not** consumed synchronously here — per the confirmed sequencing ("Inventory Reservation after Place Order"), Order calls Inventory's `ReserveStock` interface directly and synchronously as the next step in its own checkout orchestration (see Section 4.8's Boundaries), rather than Inventory reacting to a published event after the fact. This keeps reservation failure synchronously reportable back to the checkout flow rather than discovered asynchronously. ADR-0021 clarifies the transaction-boundary wording around this flow.
 
 **Data Ownership:** Inventory Item, Inventory Reservation, Inventory Ledger.
 
@@ -228,11 +229,11 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 ### 4.8 Order
 
-**Responsibilities:** Owns the order record itself and orchestrates checkout — the confirmed architectural decision that "Checkout belongs to Order Module." Order is the module that turns a Cart into a committed business transaction: validating the cart, calling Inventory to reserve stock, calling Payment to initiate/confirm payment, applying Promotion results, and recording the outcome as an Order with Order Items and an append-only Order Event history. Also owns order-time price snapshots (Open Decision 5).
+**Responsibilities:** Owns the order record itself and orchestrates checkout — the confirmed architectural decision that "Checkout belongs to Order Module." Order is the module that turns a Cart into a committed business transaction: validating the cart, calling Inventory to reserve stock, calling Payment to initiate/confirm payment, applying Promotion results, and recording the outcome as an Order with Order Items and an append-only Order Event history. Also owns order-time price snapshots (ADR-0020).
 
 **Boundaries:** Does not perform inventory reservation itself — it calls Inventory's public interface to do so, as the next step after the order record exists (see Section 4.6's Consumed Events note). Does not process payment itself — it calls Payment's public interface and reacts to Payment's results. Does not decide delivery assignment — that is Delivery's job, triggered by Order reaching a ready-for-fulfillment state. Order is an **orchestrator** of checkout, not the owner of every entity checkout touches.
 
-**Ownership:** Order (DDD 5.17), Order Item (DDD 5.18), Order Event (DDD 5.19), Price Snapshot (DDD 5.32, per Open Decision 5).
+**Ownership:** Order (DDD 5.17), Order Item (DDD 5.18), Order Event (DDD 5.19), Price Snapshot (DDD 5.32, per ADR-0020).
 
 **Public Interfaces:** PlaceOrder, GetOrder, ListOrdersForCustomer, CancelOrder, GetOrderEvents, RecordOrderEvent.
 
@@ -252,11 +253,11 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 ### 4.9 Payment
 
-**Responsibilities:** Owns payment state and settlement across mada, card, BNPL, cash-on-delivery, and card-on-delivery, and owns refund processing (Open Decision 2). Is the Backend's sole caller of the external Payment Gateway (`03-System-Context.md`).
+**Responsibilities:** Owns payment state and settlement across mada, card, BNPL, cash-on-delivery, and card-on-delivery, and owns refund processing (ADR-0020). Is the Backend's sole caller of the external Payment Gateway (`02-context/system-context.md`).
 
 **Boundaries:** Does not decide whether an order is eligible for a refund on business grounds (that's a rule Order/support process evaluates before calling Payment) — Payment executes and records the financial transaction, it does not adjudicate business eligibility beyond the payment-state constraints the DDD already defines (e.g., a refund amount must use the order's price snapshot, not current catalog price). Does not initiate itself — Order calls Payment as a checkout step.
 
-**Ownership:** Payment (DDD 5.24), Payment History (DDD 5.25), Cash Remittance (DDD 5.26), Card-on-Delivery Record (DDD 5.27), Refund (DDD 5.28, per Open Decision 2).
+**Ownership:** Payment (DDD 5.24), Payment History (DDD 5.25), Cash Remittance (DDD 5.26), Card-on-Delivery Record (DDD 5.27), Refund (DDD 5.28, per ADR-0020).
 
 **Public Interfaces:** InitiatePayment, ConfirmPayment, RecordCashCollection, RecordCardOnDeliveryCollection, IssueRefund, GetPaymentStatus.
 
@@ -270,7 +271,7 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 **Data Ownership:** Payment, Payment History, Cash Remittance, Card-on-Delivery Record, Refund.
 
-**Future Expansion:** Terminal/POS settlement provider integration for card-on-delivery reconciliation remains an explicitly unresolved "Phase 1 spike" per the DDD and `03-System-Context.md`; when resolved, it becomes a new external integration owned by Payment, not a new module.
+**Future Expansion:** Terminal/POS settlement provider integration for card-on-delivery reconciliation remains an explicitly unresolved "Phase 1 spike" per the DDD and `02-context/system-context.md`; when resolved, it becomes a new external integration owned by Payment, not a new module.
 
 ---
 
@@ -278,7 +279,7 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 **Responsibilities:** Owns promotional rules, promo codes, and promotion usage tracking — eligibility and discount calculation applied consistently regardless of which client initiated the order (Principle 4.6).
 
-**Boundaries:** Does not apply itself to an order — Order calls Promotion during checkout to evaluate eligibility and compute a discount; Promotion does not reach into Order to apply anything. Does not own the frozen order-time price record (Order's Price Snapshot, per Open Decision 5) — Promotion owns the *rule and its usage record*, not the *frozen result*.
+**Boundaries:** Does not apply itself to an order — Order calls Promotion during checkout to evaluate eligibility and compute a discount; Promotion does not reach into Order to apply anything. Does not own the frozen order-time price record (Order's Price Snapshot, per ADR-0020) — Promotion owns the *rule and its usage record*, not the *frozen result*.
 
 **Ownership:** Promotion (DDD 5.29), Promo Code (DDD 5.30), Promotion Usage (DDD 5.31).
 
@@ -300,11 +301,11 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 ### 4.11 Delivery
 
-**Responsibilities:** Owns in-store picking (Open Decision 3) and rider-based delivery: picking session execution, delivery assignment to riders, and rider location tracking during active delivery.
+**Responsibilities:** Owns in-store picking (ADR-0020) and rider-based delivery: picking session execution, delivery assignment to riders, and rider location tracking during active delivery.
 
 **Boundaries:** Does not own the order itself — it acts on an order reaching a fulfillment-ready state (signaled by `OrderReadyForFulfillment`) and reports back via events (`PickingCompleted`, `DeliveryCompleted`) rather than writing to Order's tables. Does not own worker profile/capability/shift data — it reads that from User to determine eligible pickers/riders, through User's public interface.
 
-**Ownership:** Picking Session (DDD 5.20, per Open Decision 3), Picking Session Item (DDD 5.21), Delivery Assignment (DDD 5.22), Rider Location (DDD 5.23).
+**Ownership:** Picking Session (DDD 5.20, per ADR-0020), Picking Session Item (DDD 5.21), Delivery Assignment (DDD 5.22), Rider Location (DDD 5.23).
 
 **Public Interfaces:** StartPickingSession, CompletePickingSession, AssignRider, RecordRiderLocation, CompleteDelivery, GetActiveAssignmentForRider.
 
@@ -318,13 +319,13 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 **Data Ownership:** Picking Session, Picking Session Item, Delivery Assignment, Rider Location.
 
-**Future Expansion:** DDD Section 17.4 ("Batch Delivery") is the named future-expansion driver. Rider Location's short-retention, PDPL-reviewed data (DDD Section 5.23) is a candidate for its own dedicated, time-series-optimized storage path if evidenced load ever justifies it — a `04-Technology-Stack.md`-level decision, not a module-boundary one.
+**Future Expansion:** DDD Section 17.4 ("Batch Delivery") is the named future-expansion driver. Rider Location's short-retention, PDPL-reviewed data (DDD Section 5.23) is a candidate for its own dedicated, time-series-optimized storage path if evidenced load ever justifies it — a `04-cross-cutting/technology-decisions.md`-level decision, not a module-boundary one.
 
 ---
 
 ### 4.12 Notification
 
-**Responsibilities:** Owns outbound communication to customers and workers — SMS, push, and future channels — and is the Backend's sole caller of the external SMS/OTP Provider and Push Notification Service (`03-System-Context.md`).
+**Responsibilities:** Owns outbound communication to customers and workers — SMS, push, and future channels — and is the Backend's sole caller of the external SMS/OTP Provider and Push Notification Service (`02-context/system-context.md`).
 
 **Boundaries:** Does not decide *when* a business event warrants a notification — that is expressed by the event itself (Order, Payment, Delivery, and Auth all publish events Notification consumes); Notification's job is reliable delivery and delivery-status tracking, not business judgment about what's notification-worthy. Business state must never depend on notification delivery succeeding (DDD Section 5.33's own constraint) — Notification is purely a downstream, asynchronous consumer (ADR-0011).
 
@@ -338,15 +339,39 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 **Published Events:** `NotificationSent`, `NotificationFailed`, `NotificationDeliveryConfirmed`.
 
-**Consumed Events:** `OtpRequested`, `OrderPlaced`, `OrderStatusChanged`, `PaymentAuthorized`, `PaymentFailed`, `DeliveryAssigned`, `DeliveryCompleted` — effectively every published event in the system with a customer- or worker-facing communication implication, per `09-Event-Architecture.md`'s eventual full list.
+**Consumed Events:** `OtpRequested`, `OrderPlaced`, `OrderStatusChanged`, `PaymentAuthorized`, `PaymentFailed`, `DeliveryAssigned`, `DeliveryCompleted` — effectively every published event in the system with a customer- or worker-facing communication implication, per `04-cross-cutting/integration-and-messaging.md`'s eventual full list.
 
 **Data Ownership:** Notification.
 
-**Future Expansion:** Browser notifications for the Customer Web App and email (both noted as future channels in the DDD and in `03-System-Context.md`) extend Notification's channel set without changing its boundary.
+**Future Expansion:** Browser notifications for the Customer Web App and email (both noted as future channels in the DDD and in `02-context/system-context.md`) extend Notification's channel set without changing its boundary.
 
 ---
 
-### 4.13 Analytics
+### 4.13 Support
+
+**Responsibilities:** Owns support tickets and support conversation history for customer, order, payment, refund, delivery, and worker-related issues. Provides the operational surface through which Admin/Ops/Support staff investigate and resolve customer or internal issues without taking ownership of the underlying order, payment, delivery, or inventory records.
+
+**Boundaries:** Does not modify Order, Payment, Delivery, Inventory, or User records directly. A support action that changes business state (refund, cancellation, reassignment, profile correction) must call the owning module's public interface and must be authorized/audited like any other administrative action. Support owns the ticket and its comments; it does not own the business entity the ticket discusses.
+
+**Ownership:** Support Ticket (DDD 5.34), Support Ticket Comment (DDD 5.35).
+
+**Public Interfaces:** OpenTicket, AddTicketComment, AssignTicket, UpdateTicketStatus, LinkTicketToEntity, GetTicket, ListTicketsForCustomer, ListTicketsForOrder.
+
+**Dependencies:** User (to resolve the customer/worker profile attached to a ticket), Order (for order-scoped ticket context), Payment (for payment/refund context where applicable), Delivery (for delivery-assignment context where applicable).
+
+**Forbidden Dependencies:** Catalog, Inventory, Cart, Promotion, Search. Support may reference these indirectly through the owning business entity or through read-only context surfaced by the owning module, but it does not need direct calls into them to own a support workflow.
+
+**Published Events:** `SupportTicketOpened`, `SupportTicketAssigned`, `SupportTicketStatusChanged`, `SupportTicketCommentAdded`, `SupportTicketClosed`, `SupportTicketReopened`.
+
+**Consumed Events:** `OrderCancelled`, `PaymentFailed`, `RefundIssued`, `DeliveryCompleted`, `DeliveryFailed` where these events are useful for automatically linking or updating support context. Support must not be required for those workflows to complete.
+
+**Data Ownership:** Support Ticket, Support Ticket Comment.
+
+**Future Expansion:** A richer CRM/helpdesk integration could eventually sit behind Support's boundary. That would be an external integration owned by Support, not a reason for Order, Payment, or User to own tickets.
+
+---
+
+### 4.14 Analytics
 
 **Responsibilities:** Owns reporting rollups and analytics snapshots — an explicit, purpose-built read model over the rest of the system's activity (Principle 4.5's reporting exception), never a live shortcut into another module's operational tables.
 
@@ -362,7 +387,7 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 **Published Events:** None. Analytics is a pure read-side consumer.
 
-**Consumed Events:** A broad subset of system events relevant to reporting — `OrderPlaced`, `OrderCancelled`, `PaymentCaptured`, `RefundIssued`, `DeliveryCompleted`, and others as reporting needs grow; the authoritative list belongs to `09-Event-Architecture.md`.
+**Consumed Events:** A broad subset of system events relevant to reporting — `OrderPlaced`, `OrderCancelled`, `PaymentCaptured`, `RefundIssued`, `DeliveryCompleted`, and others as reporting needs grow; the authoritative list belongs to `04-cross-cutting/integration-and-messaging.md`.
 
 **Data Ownership:** Report Rollup, Analytics Snapshot.
 
@@ -370,11 +395,11 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 ---
 
-### 4.14 Audit
+### 4.15 Audit
 
 **Responsibilities:** Owns the append-only, immutable audit log — the durable record of who did what, when, satisfying Principle 4.10 for every action across the system with financial, inventory, or lifecycle consequence.
 
-**Boundaries:** Never interprets or judges the actions it records — it is a faithful, immutable recorder, not a business-rule enforcer. Never blocks a business operation from completing — audit recording failure is itself an incident to be surfaced (per the "silent failure of consequential actions" anti-pattern, `00-Architecture-Principles.md` Section 10), not a reason to fail the underlying operation, though this tradeoff and its exact mechanics belong to `08-Security-Architecture.md` and `09-Event-Architecture.md`.
+**Boundaries:** Never interprets or judges the actions it records — it is a faithful, immutable recorder, not a business-rule enforcer. Never blocks a business operation from completing — audit recording failure is itself an incident to be surfaced (per the "silent failure of consequential actions" anti-pattern, `00-Architecture-Principles.md` Section 10), not a reason to fail the underlying operation, though this tradeoff and its exact mechanics belong to `04-cross-cutting/security-and-compliance.md` and `04-cross-cutting/integration-and-messaging.md`.
 
 **Ownership:** Audit Log (DDD 5.37).
 
@@ -386,7 +411,7 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 **Published Events:** None.
 
-**Consumed Events:** Every event in the system that represents a consequential action is either directly recorded via `RecordAuditEntry` calls from the acting module, or consumed here for centralized recording — the exact mechanism (push from the acting module vs. Audit subscribing broadly) is left to `09-Event-Architecture.md` to settle.
+**Consumed Events:** Every event in the system that represents a consequential action is either directly recorded via `RecordAuditEntry` calls from the acting module, or consumed here for centralized recording — the exact mechanism (push from the acting module vs. Audit subscribing broadly) is left to `04-cross-cutting/integration-and-messaging.md` to settle.
 
 **Data Ownership:** Audit Log.
 
@@ -394,7 +419,7 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 ---
 
-### 4.15 Settings
+### 4.16 Settings
 
 **Responsibilities:** Owns global and store-scoped configuration — the platform's own operational knobs, distinct from any single business module's data.
 
@@ -420,7 +445,7 @@ Before the catalog: the fifteen-module list given for this task does not fully m
 
 ## 5. Cross-Module Summary Table
 
-A quick-reference view of the fifteen modules and their DDD-entity grounding. This table is a navigation aid only — Section 4 is authoritative where the two differ in detail.
+A quick-reference view of the sixteen modules and their DDD-entity grounding. This table is a navigation aid only — Section 4 is authoritative where the two differ in detail.
 
 | Module | Primary Entities Owned | Owns No Primary Data? |
 |---|---|---|
@@ -436,8 +461,8 @@ A quick-reference view of the fifteen modules and their DDD-entity grounding. Th
 | Promotion | Promotion, Promo Code, Promotion Usage | No |
 | Delivery | Picking Session, Picking Session Item, Delivery Assignment, Rider Location | No |
 | Notification | Notification | No |
+| Support | Support Ticket, Support Ticket Comment | No |
 | Analytics | Report Rollup, Analytics Snapshot | No (but rebuildable — see 4.13) |
 | Audit | Audit Log | No |
 | Settings | Settings | No |
 
-**Unassigned DDD entities:** Support Ticket, Support Ticket Comment (see Open Decision 1).

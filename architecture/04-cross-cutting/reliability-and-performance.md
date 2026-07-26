@@ -1,11 +1,11 @@
-# Performance, Scalability, and Reliability — Sakhari Ecom
+﻿# Performance, Scalability, and Reliability — Sakhari Ecom
 
 | | |
 |---|---|
 | **Version** | 1.0 |
 | **Status** | Authored. |
 | **Stability** | Stable in philosophy (correctness before performance, vertical scaling before horizontal, complexity earned not speculated — Principle 4.1, Constitution Section 6/13); evolving in specific targets and thresholds as real traffic data becomes available. |
-| **Authority** | Subordinate to `00-Architecture-Principles.md`, `01-Architecture-Design-Specification.md`, `02-Architecture-Decisions.md`, `03-System-Context.md`, `04-Technology-Stack.md`, `03-decomposition/module-catalog.md` / `module-communication.md`, and `04-cross-cutting/data-architecture.md` / `integration-and-messaging.md`. Does not repeat their content — see Section 2. |
+| **Authority** | Subordinate to `00-Architecture-Principles.md`, `01-Architecture-Design-Specification.md`, `decisions/README.md`, `02-context/system-context.md`, `04-cross-cutting/technology-decisions.md`, `03-decomposition/module-catalog.md` / `module-communication.md`, and `04-cross-cutting/data-architecture.md` / `integration-and-messaging.md`. Does not repeat their content — see Section 2. |
 
 ## 1. Purpose, Scope, and Intended Audience
 
@@ -36,7 +36,7 @@ Performance is pursued *within* the bounds correctness already sets (Principle 4
 Two caching layers exist, each already fully specified elsewhere and only summarized here in their performance capacity:
 
 - **Redis**, for read acceleration, session state, and rate limiting (`data-architecture.md` Sections 3, 6, 13) — the general-purpose cache for anything read frequently relative to how often it changes, always with PostgreSQL as the fallback source of truth (ADR-0004).
-- **CDN**, for public, cacheable content — product imagery from S3 and Customer Web App static assets (`05-deployment/infrastructure-and-release.md` Section 3; `04-Technology-Stack.md` Section 11) — reducing latency for the public-facing surfaces specifically, independent of Redis's role for authenticated, dynamic requests.
+- **CDN**, for public, cacheable content — product imagery from S3 and Customer Web App static assets (`05-deployment/infrastructure-and-release.md` Section 3; `04-cross-cutting/technology-decisions.md` Section 11) — reducing latency for the public-facing surfaces specifically, independent of Redis's role for authenticated, dynamic requests.
 
 **Why two layers and not one:** they solve different problems at different points in the request path. The CDN sits in front of the system entirely, serving requests that never reach the Backend at all; Redis sits inside the Backend, accelerating requests that do reach it. Collapsing them into one layer would either push public asset traffic through the Backend unnecessarily (defeating the CDN's purpose) or push authenticated, per-user data out to an edge cache inappropriate for it (a correctness and privacy risk `data-architecture.md`'s Redis boundary already rules out).
 
@@ -104,3 +104,4 @@ The scalability endgame this entire document builds toward: because every module
 - **Specific horizontal-scaling and read-replica trigger thresholds** (what utilization or latency level actually justifies pulling that lever) are not decided — Section 11's "monitor before scaling" principle is established; the specific thresholds are not.
 - **Whether background-job scheduling (Section 7) is Redis-backed via a lightweight library or a more structured job-processing approach** is SDD-level detail, not decided here.
 - **Partitioning strategy specifics** (by what period, at what table-size threshold) for the append-only tables named in Section 9 are explicitly deferred in `data-architecture.md` and remain deferred here.
+

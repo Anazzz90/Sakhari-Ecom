@@ -1,15 +1,15 @@
-# Module Communication — Sakhari Ecom
+﻿# Module Communication — Sakhari Ecom
 
 | | |
 |---|---|
 | **Version** | 1.0 |
 | **Status** | Authored. |
 | **Stability** | Stable in rule, evolving in the specific dependency graph as modules and events are added. The *shape* of allowed communication (REST at the boundary, in-process interface calls and domain events internally, no cross-module data access) is as stable as ADR-0002/0009/0011, which it implements directly. |
-| **Authority** | Subordinate to `00-Architecture-Principles.md`, `01-Architecture-Design-Specification.md`, `02-Architecture-Decisions.md`, `03-System-Context.md`, `04-Technology-Stack.md`, and `03-decomposition/module-catalog.md` (05). This document does not redefine any module's ownership or responsibilities — it defines the rules for how ownership boundaries are crossed. |
+| **Authority** | Subordinate to `00-Architecture-Principles.md`, `01-Architecture-Design-Specification.md`, `decisions/README.md`, `02-context/system-context.md`, `04-cross-cutting/technology-decisions.md`, and `03-decomposition/module-catalog.md` (05). This document does not redefine any module's ownership or responsibilities — it defines the rules for how ownership boundaries are crossed. |
 
 ## 1. Purpose, Scope, and Intended Audience
 
-**Purpose.** `module-catalog.md` establishes *what* each of the fifteen backend modules owns and is responsible for. This document establishes *how* they are allowed to reach each other, and — just as importantly — how they are not. It is the enforcement layer for ADR-0009's "no cross-module repository access" rule: a boundary that can't be crossed incorrectly only if the correct ways to cross it are written down as precisely as the forbidden ones.
+**Purpose.** `module-catalog.md` establishes *what* each of the sixteen backend modules owns and is responsible for. This document establishes *how* they are allowed to reach each other, and — just as importantly — how they are not. It is the enforcement layer for ADR-0009's "no cross-module repository access" rule: a boundary that can't be crossed incorrectly only if the correct ways to cross it are written down as precisely as the forbidden ones.
 
 **Scope.** This document covers:
 - Which forms of communication are allowed and forbidden, in general and per-module.
@@ -18,11 +18,11 @@
 - How transactions behave when a business operation spans more than one module's owned data.
 - How circular dependencies are prevented by design, not just by discipline.
 
-This document does **not** cover: event payload structure, delivery guarantees, retry, or idempotency mechanics (`09-Event-Architecture.md`); database schema or persistence mechanics (`07-Data-Architecture.md`); authentication/authorization mechanics (`08-Security-Architecture.md`); or any implementation detail — no code, no method signatures, no class names. "Communication Examples" (Section 9) are narrative walkthroughs of who calls whom and in what order, not code.
+This document does **not** cover: event payload structure, delivery guarantees, retry, or idempotency mechanics (`04-cross-cutting/integration-and-messaging.md`); database schema or persistence mechanics (`04-cross-cutting/data-architecture.md`); authentication/authorization mechanics (`04-cross-cutting/security-and-compliance.md`); or any implementation detail — no code, no method signatures, no class names. "Communication Examples" (Section 9) are narrative walkthroughs of who calls whom and in what order, not code.
 
 **Intended audience.** Same as `module-catalog.md`: the project owner, an AI coding assistant about to add or change an inter-module call, and the author of any future module SDD, for whom this document's dependency graph is a boundary to design within, not a starting point to renegotiate.
 
-**Cross-references.** Builds directly on `module-catalog.md`'s per-module Dependencies, Forbidden Dependencies, Public Interfaces, Published Events, and Consumed Events fields (Section 6 below aggregates them into one graph). Implements ADR-0002 (Modular Monolith), ADR-0009 (Module Ownership and No Cross-Module Repository Access), ADR-0010 (Transactional Checkout and Inventory Reservation), ADR-0011 (Event-Driven Asynchronous Side Effects), ADR-0017 (Versioned APIs), and Principles 4.4–4.9 and 4.11. Resolves one point `module-catalog.md` explicitly deferred here — see Section 7's note on Payment initiation.
+**Cross-references.** Builds directly on `module-catalog.md`'s per-module Dependencies, Forbidden Dependencies, Public Interfaces, Published Events, and Consumed Events fields (Section 6 below aggregates them into one graph). Implements ADR-0002 (Modular Monolith), ADR-0009 (Module Ownership and No Cross-Module Repository Access), ADR-0010 (Transactional Checkout and Inventory Reservation), ADR-0011 (Event-Driven Asynchronous Side Effects), ADR-0017 (Versioned APIs), ADR-0020 (Module Ownership Reconciliation), ADR-0021 (Checkout Transaction Boundary Clarification), and Principles 4.4–4.9 and 4.11.
 
 ---
 
@@ -33,7 +33,7 @@ Exactly four forms of communication exist in this system. Nothing outside these 
 1. **Client → Backend, via REST.** The only way any client (Customer Mobile App, Customer Web App, Worker App, Admin/Ops Dashboard) reaches the system, through the versioned API (ADR-0017). See Section 3.
 2. **Module → Module, via public interface (synchronous, in-process call).** The only way one module invokes another's behavior directly. See Section 4.
 3. **Module → Module, via domain event (asynchronous).** The only way a module reacts to something that happened elsewhere without being invoked directly. See Section 5.
-4. **Module → External system.** Only by the specific module `03-System-Context.md` and `module-catalog.md` name as that integration's owner (Payment ↔ Payment Gateway; Auth and Notification ↔ SMS/OTP Provider; Notification ↔ Push Notification Service). No other module ever calls an external system directly.
+4. **Module → External system.** Only by the specific module `02-context/system-context.md` and `module-catalog.md` name as that integration's owner (Payment ↔ Payment Gateway; Auth and Notification ↔ SMS/OTP Provider; Notification ↔ Push Notification Service). No other module ever calls an external system directly.
 
 ## 3. Forbidden Communication
 
@@ -67,7 +67,7 @@ Events are the asynchronous half of module communication (ADR-0011, Principle 4.
 - **A module may only publish events about entities it owns.** Order publishes `OrderPlaced` because Order owns Order; Inventory publishes `InventoryReserved` because Inventory owns Inventory Reservation. This mirrors Section 4's data-ownership rule exactly: just as a module is the only one that can *write* its own data, it is the only one that can *announce* something happened to it.
 - **Publishers never wait on consumers**, and never know how many consumers exist. Adding a new consumer of an existing event (for example, a future Analytics subscription to an event only Notification currently consumes) never requires a change to the publishing module.
 - **Naming convention:** `<Entity><PastTenseVerb>` — `OrderPlaced`, `InventoryReserved`, `PaymentAuthorized` — established in `module-catalog.md` and used consistently across every module's Published/Consumed Events fields.
-- Full event mechanics — delivery guarantees, retry behavior, idempotency requirements, versioning, and the eventual authoritative list of every event in the system — are `09-Event-Architecture.md`'s subject. This document only establishes events as an allowed communication mode and the ownership rule governing who may publish what.
+- Full event mechanics — delivery guarantees, retry behavior, idempotency requirements, versioning, and the eventual authoritative list of every event in the system — are `04-cross-cutting/integration-and-messaging.md`'s subject. This document only establishes events as an allowed communication mode and the ownership rule governing who may publish what.
 
 ## 7. Dependency Rules
 
@@ -80,6 +80,7 @@ The dependency graph is built directly from every module's Dependencies and Forb
 | **Commerce** | Cart, Inventory, Promotion | Foundation, Reference |
 | **Transaction orchestration** | Order, Payment | Foundation, Reference, Commerce (Order is the orchestrator; Payment depends only on Order) |
 | **Fulfillment** | Delivery | Foundation, Order |
+| **Operations/support** | Support | Foundation, Order, Payment, Delivery |
 | **Consumer tier** (no one depends on these; they depend on almost nothing) | Notification, Analytics, Audit | Nothing synchronously required of them; they consume events from every layer above |
 
 **Why a layered, one-directional graph:** this is what makes the modular monolith safely extractable later (Constitution Section 13; `01-Architecture-Design-Specification.md` Section 15) — a module that only ever depends downward can be pulled into its own service without discovering a hidden upward dependency that turns into a distributed cycle. It is also what makes the system reasoning-friendly for a solo developer and an AI assistant with no memory of prior sessions: "can module X call module Y" is answered by table lookup, not by tracing the whole codebase.
@@ -98,7 +99,7 @@ For a business operation that touches multiple modules' data — checkout being 
 
 This is a deliberate architectural choice, not a gap: at this system's scale, a small number of well-understood orchestration flows (checkout being the primary one) is far simpler to reason about and debug than distributed transaction machinery would be, and it keeps every module's persistence concerns fully local to itself — which is exactly what makes future module extraction (Section 7) viable. The trade-off is that a compensating rollback is not instantaneous the way a database `ROLLBACK` is — there is a brief window where an order record exists in a not-yet-confirmed state before a failed reservation triggers its cancellation. This window, and how it's surfaced (or hidden) from the customer, is left to the relevant module's SDD to detail; the architectural guarantee this document makes is only that the window is bounded, explicit, and always resolved to a consistent end state — never left ambiguous.
 
-**Note:** this reconciles the tension `module-catalog.md`'s Open Decisions flagged between ADR-0010's exact wording ("a single PostgreSQL transaction encompassing order creation and inventory reservation") and the DDD's two-transaction model. This document treats the DDD's model — and the orchestration-with-compensation pattern above — as the operative one. ADR-0010's wording should be tightened by a future clarifying ADR to match; until then, this section is the authoritative description of how checkout's transactional behavior actually works.
+**Note:** ADR-0021 resolves the tension earlier drafts flagged between ADR-0010's broad wording and the DDD's module-local transaction model. This section is the operative communication rule: checkout is orchestration with compensation, never one transaction spanning two modules' tables.
 
 ## 9. Circular Dependency Prevention
 
@@ -107,11 +108,11 @@ The dependency graph in Section 7 is a directed acyclic graph (DAG) by design: e
 - **Structural:** the consumer tier (Notification, Analytics, Audit) and the reference tier's Search module are deliberately built to have nothing depend on them synchronously — a module that only ever *receives* calls or *consumes* events cannot be part of a synchronous cycle, because nothing waits on it to do anything.
 - **The event mechanism is the designed escape valve** for any relationship that would otherwise require an upward or sideways dependency. The clearest example: Search needs Catalog's product data to build its index, but Catalog must never depend on Search (Catalog is Reference-tier, Search must never become something Catalog waits on). The resolution is that Search *consumes* Catalog's published events (`ProductCreated`, `ProductUpdated`, `ProductDeactivated`) rather than Catalog calling into Search — the dependency exists, but it flows through an asynchronous, one-directional event rather than a synchronous call that could ever become a cycle.
 
-**Enforcement today** is code review against this document's dependency table, applied the same way to human-written and AI-generated code (Constitution Principle 4.12) — there is no compiler-level boundary inside a single NestJS deployable that prevents an import across module boundaries by itself (`04-Technology-Stack.md`'s NestJS entry makes this same point: the framework gives structural vocabulary for the boundary, not a guarantee of it). **Future enforcement**, once the codebase is large enough to justify the tooling investment, is expected to be automated (a lint rule or module-boundary-checking tool) rather than relying on review discipline indefinitely — consistent with ADR-0009's own future-enforcement note.
+**Enforcement today** is code review against this document's dependency table, applied the same way to human-written and AI-generated code (Constitution Principle 4.12) — there is no compiler-level boundary inside a single NestJS deployable that prevents an import across module boundaries by itself (`04-cross-cutting/technology-decisions.md`'s NestJS entry makes this same point: the framework gives structural vocabulary for the boundary, not a guarantee of it). **Future enforcement**, once the codebase is large enough to justify the tooling investment, is expected to be automated (a lint rule or module-boundary-checking tool) rather than relying on review discipline indefinitely — consistent with ADR-0009's own future-enforcement note.
 
 ## 10. Communication Examples
 
-Narrative walkthroughs only — no code, no message payloads (those belong to `09-Event-Architecture.md`).
+Narrative walkthroughs only — no code, no message payloads (those belong to `04-cross-cutting/integration-and-messaging.md`).
 
 **Example 1 — Checkout (Place Order), the canonical cross-module orchestration:**
 1. A client sends a REST request to place an order. The controller validates the request shape and calls Order's `PlaceOrder` interface.
@@ -133,7 +134,7 @@ Narrative walkthroughs only — no code, no message payloads (those belong to `0
 **Example 3 — OTP login, the one named synchronous exception:**
 1. A client requests a login code. The request reaches Auth's `RequestOtp` interface.
 2. Auth calls Notification's `SendNotification` synchronously (Section 3's named exception) specifically to get a dispatch confirmation before telling the client to expect a code.
-3. Notification calls the external SMS/OTP Provider (`03-System-Context.md`) and returns a dispatch result to Auth.
+3. Notification calls the external SMS/OTP Provider (`02-context/system-context.md`) and returns a dispatch result to Auth.
 4. Auth publishes `OtpRequested` for audit purposes and returns success/failure to the client.
 
 **Counter-example — what this document forbids:** a hypothetical "products frequently bought together" feature implemented by Catalog directly querying Order's tables for co-purchase patterns. This is forbidden outright (Section 3) regardless of how convenient the join would be — the correct design is a read model (owned by Analytics or Search, per Principle 4.5's reporting exception) built from consumed `OrderPlaced` events, exactly as Search's product index is built from consumed Catalog events in Example 2.
@@ -146,7 +147,7 @@ Narrative walkthroughs only — no code, no message payloads (those belong to `0
 
 **Future evolution:** when a module is eventually extracted into its own independently deployed service (Constitution Section 13; `01-Architecture-Design-Specification.md` Section 15), the change is concentrated exactly where this document says communication happens:
 - **Section 5's in-process interface calls** become network calls (the specific mechanism — REST, gRPC, or otherwise — is a future decision, not one this document makes). The *contract* — what operations exist and what they mean — does not need to change, if the boundary was respected as designed.
-- **Section 6's domain events** already cross a conceptual boundary asynchronously; extracting a module changes their transport (an in-process event dispatcher today, a message broker later) but not their meaning or their publish/consume ownership rules. This transport question is explicitly `09-Event-Architecture.md`'s "Future Event Bus Strategy" to answer, not this document's.
+- **Section 6's domain events** already cross a conceptual boundary asynchronously; extracting a module changes their transport (an in-process event dispatcher today, a message broker later) but not their meaning or their publish/consume ownership rules. This transport question is explicitly `04-cross-cutting/integration-and-messaging.md`'s "Future Event Bus Strategy" to answer, not this document's.
 - **Section 8's orchestration-with-compensation pattern** for cross-module consistency does not change at all on extraction — it was never a single-process transaction to begin with, so moving a participant to a different process changes nothing about how the pattern works.
 
 This is the concrete payoff of every rule in this document: the discipline costs something today, and buys the option to change the deployment shape later without rewriting how modules relate to each other.
@@ -155,7 +156,5 @@ This is the concrete payoff of every rule in this document: the discipline costs
 
 ## 12. Open Decisions
 
-- **Payment initiation vs. event-triggering** — resolved in this document (Section 7); `module-catalog.md`'s Payment and Order entries should be read in light of this resolution rather than their original, more tentative wording.
-- **Audit's exact invocation mechanism** (direct synchronous call from every writing module, vs. broad event subscription) remains open, carried forward from `module-catalog.md` — this document establishes only that Audit must never block a business operation from completing regardless of which mechanism is chosen; the mechanism itself is `09-Event-Architecture.md`'s to settle.
 - **Automated circular-dependency and boundary enforcement tooling** (Section 9) is named as a future direction, not a current commitment — no specific tool or timeline is decided here.
-- The seven reconciliation points `module-catalog.md`'s own Open Decisions section raised (Support module's ownership, Refund/Picking/Workforce/Pricing folding, Search's lack of a backing ADR, the Auth/User split) are unaffected by this document and remain open at the same status.
+

@@ -1,4 +1,4 @@
-# AI Development Rules — Sakhari Ecom
+﻿# AI Development Rules — Sakhari Ecom
 
 | | |
 |---|---|
@@ -37,7 +37,7 @@ Before writing or modifying a single line of code for this project, establish wh
 
 The following are load-bearing and apply to every task without exception, restated here only as a checklist — each is fully explained in the document cited:
 
-- One deployable Backend, fifteen fixed modules, no new module without an ADR (ADR-0002, ADR-0009; `module-catalog.md`).
+- One deployable Backend, sixteen fixed modules, no new module without an ADR (ADR-0002, ADR-0009, ADR-0020; `module-catalog.md`).
 - PostgreSQL is the only source of truth; Redis is cache/queue/lock/rate-limit only, never authoritative (ADR-0003, ADR-0004; `data-architecture.md` Sections 2–3).
 - No cross-module repository access, ever — a module reaches another module only through its public interface (ADR-0009; `module-communication.md` Section 2).
 - REST is the client-facing protocol only; modules never call each other over REST — in-process interface calls and domain events are the only internal communication modes (`module-communication.md` Sections 3–5).
@@ -128,10 +128,10 @@ Specific, concrete failure modes an AI assistant is prone to on this project, na
 - **Assuming UUIDs instead of ULIDs for identifiers.** This is not a hypothetical risk — it happened in this project's own history (`decisions/0013`, `0018`, `0019`): an earlier pass adopted UUIDs based on a draft error in the DDD, before the DDD was corrected and ULIDs restored. Always check `decisions/0019` (the current, effective decision) rather than a general assumption about what's "standard."
 - **Assuming a microservices architecture** because the system is described in terms of "modules," "boundaries," and "services" throughout this documentation set. It is a single-deployable modular monolith (ADR-0002) with in-process communication (`module-communication.md` Section 4) — module-to-module calls are never network calls, and events are dispatched in-process, not via a message broker, today (`integration-and-messaging.md` Section 11).
 - **Assuming Redis holds business data** because it's described as part of the "data architecture." It never does (Principle 4.3, ADR-0004) — anything Redis holds is disposable by design.
-- **Inventing a specific payment gateway, SMS provider, or cloud region name** not stated in any approved document. `03-System-Context.md` and `04-Technology-Stack.md` name these functionally (Payment Gateway, SMS/OTP Provider, Cloud Infrastructure Provider) precisely because the specific vendor is not committed in writing anywhere this document set can point to — do not fill that gap with a plausible-sounding guess.
+- **Ignoring the accepted provider decisions.** Moyasar is the accepted online payment gateway (ADR-0022), Unifonic is the accepted SMS/OTP provider (ADR-0023), and AWS `me-central-2` is the accepted production region (ADR-0024). Do not replace them with Stripe, Twilio, Firebase Auth, a generic cloud region, or another plausible default unless the user explicitly asks to revisit the ADR.
 - **Inventing specific SLA numbers, backup retention windows, or scaling thresholds.** `reliability-and-performance.md` and `infrastructure-and-release.md` both explicitly leave these as Open Decisions. A plausible-sounding number ("99.9% uptime," "30-day retention") is still an invention if it doesn't trace to an approved document.
 - **Assuming a specific test framework, linter, or monorepo/polyrepo structure** — `coding-standards.md` Section 12 explicitly leaves all of these open. Do not generate configuration or code that presumes one without flagging the assumption.
-- **Treating a module-catalog.md Open Decision as settled** — particularly the Support module's unassigned ownership, the Refund/Picking/Workforce/Pricing folding assumptions, and Search's lack of a backing ADR (`module-catalog.md` Section 3). Code touching any of these areas should flag the gap, not silently pick a resolution.
+- **Re-opening ADR-0020's module ownership decisions.** Support is a module, Refund belongs to Payment, Picking belongs to Delivery, Workforce belongs to User, Price Snapshot belongs to Order, Auth/User are split, and Search is an accepted derived-read module. Do not treat the pre-ADR open questions as still unresolved.
 - **Assuming Payment initiation is event-triggered.** It is a direct synchronous call from Order (`module-communication.md` Section 7) — an earlier version of `module-catalog.md` left this ambiguous before it was resolved; the resolved version is authoritative.
 
 ## 13. Common Architectural Violations
@@ -150,4 +150,5 @@ Distinct from Section 12: these are violations that can occur even when every fa
 
 ## 14. Open Decisions
 
-This document introduces no Open Decisions of its own — it inherits and points to every other document's. Before treating any of the following as settled, check the cited document directly: module ownership for Support/Refund/Picking/Workforce/Pricing and the Auth/User split (`module-catalog.md` Section 3); exact token lifetimes and the full permission list (`security-and-compliance.md` Section 12); deadlock-avoidance entity-update ordering and archival timing (`data-architecture.md` Section 17); synchronous API conventions and external-integration retry patterns (`integration-and-messaging.md` Section 12); specific compute service, network topology, backup/RPO/RTO targets, and CI/CD tooling (`infrastructure-and-release.md` Section 14); exact SLA numbers and scaling thresholds (`reliability-and-performance.md` Section 13); and test framework, linter, and repository topology (`coding-standards.md` Section 13).
+This document introduces no Open Decisions of its own — it inherits and points to every other document's. Before treating any of the following as settled, check the cited document directly: exact token lifetimes and the full permission list (`security-and-compliance.md` Section 12); deadlock-avoidance entity-update ordering and archival timing (`data-architecture.md` Section 17); synchronous API conventions and external-integration retry patterns (`integration-and-messaging.md` Section 12); specific compute service, network topology, backup/RPO/RTO targets, and CI/CD tooling (`infrastructure-and-release.md` Section 14); exact SLA numbers and scaling thresholds (`reliability-and-performance.md` Section 13); and test framework, linter, and repository topology (`coding-standards.md` Section 13).
+

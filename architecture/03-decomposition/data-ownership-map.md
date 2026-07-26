@@ -6,7 +6,7 @@
 ## Purpose
 States, for every major entity in the platform, which module is the source of truth, which read models/caches are allowed, and how other consumers are expected to access it (module interface, API call, event, or approved reporting read model).
 
-**Note:** `module-catalog.md` (in this folder) already states per-module Data Ownership and includes a Cross-Module Summary Table (its Section 5). When this document is authored, it should expand that table with read-access rules and cross-module consistency expectations rather than re-deriving entity ownership independently — and should resolve the "Unassigned DDD entities" (Support Ticket, Support Ticket Comment) the catalog flags as an open point.
+**Note:** `module-catalog.md` (in this folder) already states per-module Data Ownership and includes a Cross-Module Summary Table (its Section 5). ADR-0020 resolves the earlier unassigned Support Ticket and Support Ticket Comment ownership gap by assigning them to the Support module. When this document is authored, it should expand the catalog ownership table with read-access rules and cross-module consistency expectations rather than re-deriving entity ownership independently.
 
 ## Relationship to other documents
 - **DDD:** Entities, relationships, retention, and integrity expectations are defined there; this document does not redefine entity meaning, only assigns module ownership and access rules.

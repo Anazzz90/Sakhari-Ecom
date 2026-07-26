@@ -1,11 +1,11 @@
-# Coding Standards — Sakhari Ecom
+﻿# Coding Standards — Sakhari Ecom
 
 | | |
 |---|---|
 | **Version** | 1.0 |
 | **Status** | Authored. New document — no prior skeleton existed for this scope. |
 | **Stability** | Stable in principle (module boundaries, naming-matches-domain-language, tests-protect-business-rules — all direct extensions of the Constitution); evolving in specific tooling as the codebase matures. |
-| **Authority** | Subordinate to `00-Architecture-Principles.md` (especially Section 8, Coding Philosophy, which this document expands into concrete practice), `02-Architecture-Decisions.md`, `03-decomposition/module-catalog.md` / `module-communication.md`, and `04-cross-cutting/data-architecture.md` / `security-and-compliance.md`. |
+| **Authority** | Subordinate to `00-Architecture-Principles.md` (especially Section 8, Coding Philosophy, which this document expands into concrete practice), `decisions/README.md`, `03-decomposition/module-catalog.md` / `module-communication.md`, and `04-cross-cutting/data-architecture.md` / `security-and-compliance.md`. |
 
 ## 1. Purpose, Scope, and Intended Audience
 
@@ -21,11 +21,11 @@
 
 Every module's internal folder structure mirrors its boundary exactly (ADR-0009): a module's directory contains its own service layer, its own data-access code, and its own public-interface definitions, and nothing outside that directory ever imports its internals — only its declared public interface (`module-communication.md` Section 5). This is the structural, on-disk expression of "no cross-module repository access," not merely a convention layered on top of it: if a module's data-access code is not importable from outside its own directory, the anti-pattern becomes structurally awkward to commit by accident, not just against the rules.
 
-**Whether the Backend and the four client applications live in one repository (a monorepo) or five separate repositories (one per deployable, matching ADR-0017's independent-release-cadence reasoning) is not decided in any prior document.** This document does not assert one — see Open Decisions (Section 12). What it does establish, regardless of the answer: wherever the Backend's code lives, its internal structure follows the module boundaries in `module-catalog.md` exactly — fifteen module directories, one per module, named identically to the module names used throughout this documentation set (Auth, User, Store, Catalog, Search, Inventory, Cart, Order, Payment, Promotion, Delivery, Notification, Analytics, Audit, Settings).
+**Whether the Backend and the four client applications live in one repository (a monorepo) or five separate repositories (one per deployable, matching ADR-0017's independent-release-cadence reasoning) is not decided in any prior document.** This document does not assert one — see Open Decisions (Section 12). What it does establish, regardless of the answer: wherever the Backend's code lives, its internal structure follows the module boundaries in `module-catalog.md` exactly — sixteen module directories, one per module, named identically to the module names used throughout this documentation set (Auth, User, Store, Catalog, Search, Inventory, Cart, Order, Payment, Promotion, Delivery, Notification, Support, Analytics, Audit, Settings).
 
 ## 3. Module Structure
 
-Within each of the fifteen module directories, the same internal shape applies, consistent with Principle 4.6/4.7 and ADR-0009:
+Within each of the sixteen module directories, the same internal shape applies, consistent with Principle 4.6/4.7 and ADR-0009:
 
 - **A public interface** — the operations listed in that module's `module-catalog.md` entry, and nothing else, importable from outside the module.
 - **A service layer** — where business logic actually lives (Principle 4.6). This is the only layer permitted to make decisions; everything else in the module supports it.
@@ -33,7 +33,7 @@ Within each of the fifteen module directories, the same internal shape applies, 
 - **Data-access code**, reachable only from within the module's own service layer — never imported or called from outside the module, and never bypassed by another module reaching the database directly (ADR-0009, this document's Section 2).
 - **Event publishing/consuming code**, where applicable — publishers raise events about the module's own owned entities only (`integration-and-messaging.md` Section 2); consumers handle events per that document's idempotency requirement (Section 9).
 
-**Why this shape is uniform across all fifteen modules, even though they differ enormously in complexity** (compare Settings to Order): a consistent internal shape is what lets a developer or an AI assistant orient inside any module — including one it has never worked in before, in a session with no memory of prior ones — using the same mental map every time, rather than re-learning module-specific conventions module by module.
+**Why this shape is uniform across all sixteen modules, even though they differ enormously in complexity** (compare Settings to Order): a consistent internal shape is what lets a developer or an AI assistant orient inside any module — including one it has never worked in before, in a session with no memory of prior ones — using the same mental map every time, rather than re-learning module-specific conventions module by module.
 
 ## 4. Naming Conventions
 
@@ -95,7 +95,7 @@ A reviewer — human or AI — checks a change against all of the following befo
 A separate, higher-level pass — for changes that might affect the architecture itself, not just a module's internals:
 
 - [ ] Does this change introduce a new module, redraw an existing module's boundary, or reassign data ownership? If so, does it have a backing ADR, and is `module-catalog.md` updated?
-- [ ] Does this change introduce a new technology, library category, or external dependency not already named in `04-Technology-Stack.md`? If so, does it have a backing ADR (per that document's own backfill-candidate pattern)?
+- [ ] Does this change introduce a new technology, library category, or external dependency not already named in `04-cross-cutting/technology-decisions.md`? If so, does it have a backing ADR or an explicitly documented Open Decision?
 - [ ] Does this change violate any module's Forbidden Dependencies list (`module-catalog.md` Section 4, per module)?
 - [ ] Does this change bypass authentication or RBAC authorization for any request path (`security-and-compliance.md` Sections 4, 7)?
 - [ ] Does this change duplicate business logic across two clients, or between a client and the Backend (Principle 4.6)?
@@ -115,3 +115,5 @@ A separate, higher-level pass — for changes that might affect the architecture
 - **Specific test framework, linter, and formatter** (Section 8, Section 12) — not decided; this document establishes what must be true of tests and code quality, not which tools enforce it.
 - **Specific code-coverage thresholds** for correctness-critical paths (Section 8) — not decided; "proportional to correctness criticality" is the principle, not a percentage.
 - **Whether module directories live in a shared "modules" root or are otherwise organized within the Backend repository** — a below-architecture-level detail, left to whichever SDD or initial project scaffold is authored first.
+
+

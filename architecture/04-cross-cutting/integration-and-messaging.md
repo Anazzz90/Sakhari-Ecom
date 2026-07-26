@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Version** | 1.0 |
-| **Status** | Authored — covers the asynchronous/event half of this file's original scope in full. **Not yet covered:** synchronous API conventions (already substantially defined by ADR-0017 and `module-communication.md` Section 4, not repeated here) and external-integration retry/timeout/circuit-breaking patterns specific to the Payment Gateway, SMS/OTP Provider, Push Notification Service, and Geocoding Provider (`03-System-Context.md` Section 7) — flagged in Open Decisions (Section 12) as remaining work, not silently dropped. |
+| **Status** | Authored — covers the asynchronous/event half of this file's original scope in full. **Not yet covered:** synchronous API conventions (already substantially defined by ADR-0017 and `module-communication.md` Section 4, not repeated here) and external-integration retry/timeout/circuit-breaking patterns specific to the Payment Gateway, SMS/OTP Provider, Push Notification Service, and Geocoding Provider (`02-context/system-context.md` Section 7) — flagged in Open Decisions (Section 12) as remaining work, not silently dropped. |
 | **Stability** | Stable in mechanism (events are asynchronous, one-way, and ownership-scoped — Principle 4.8, ADR-0011); evolving in the specific event catalog as modules and features grow. |
-| **Authority** | Subordinate to `00-Architecture-Principles.md`, `01-Architecture-Design-Specification.md`, `02-Architecture-Decisions.md`, `03-System-Context.md`, `04-Technology-Stack.md`, `03-decomposition/module-catalog.md`, `03-decomposition/module-communication.md`, and `04-cross-cutting/data-architecture.md`. Does not repeat their content — see Section 2. |
+| **Authority** | Subordinate to `00-Architecture-Principles.md`, `01-Architecture-Design-Specification.md`, `decisions/README.md`, `02-context/system-context.md`, `04-cross-cutting/technology-decisions.md`, `03-decomposition/module-catalog.md`, `03-decomposition/module-communication.md`, and `04-cross-cutting/data-architecture.md`. Does not repeat their content — see Section 2. |
 
 ## 1. Purpose, Scope, and Intended Audience
 
@@ -15,7 +15,7 @@
 
 **Intended audience.** The project owner, an AI coding assistant implementing an event publisher or consumer, and the author of any future module SDD, for whom this document's rules on retry, idempotency, and versioning are non-negotiable defaults for every event in the system, not a per-event choice.
 
-**Cross-references.** Builds on ADR-0011 (Event-Driven Asynchronous Side Effects), ADR-0010 (Transactional Checkout — events are raised only after a transaction commits), Principle 4.8, `module-catalog.md`'s per-module Published/Consumed Events fields, `module-communication.md` Sections 6–8 (events, dependency rules, transaction boundaries), and `data-architecture.md` Section 13 (idempotency as a concurrency mechanism — this document applies that same discipline specifically to event consumption).
+**Cross-references.** Builds on ADR-0011 (Event-Driven Asynchronous Side Effects), ADR-0010 (Transactional Checkout — events are raised only after a transaction commits), Principle 4.8, `module-catalog.md`'s per-module Published/Consumed Events fields, `module-communication.md` Sections 6—8 (events, dependency rules, transaction boundaries), and `data-architecture.md` Section 13 (idempotency as a concurrency mechanism — this document applies that same discipline specifically to event consumption).
 
 ## 2. Domain Events
 
@@ -67,7 +67,7 @@ Not every asynchronous process in the system is triggered by a domain event — 
 | Shift Reconciliation | Scheduled, tied to shift-end state | Similarly a scheduled sweep; its outcomes (closure, discrepancy flags) are recorded through Payment/Audit's normal mechanisms, not a special event type. |
 | Cleanup | Scheduled | Purges genuinely disposable data (`data-architecture.md` Section 9) — expired drafts, old notification metadata, retention-window-exceeded location history; not event-triggered and does not itself publish domain events, since purging carries no business fact worth announcing. |
 
-**Why the distinction matters:** a background job is a *when* mechanism (a schedule), while an event is a *what happened* mechanism (a fact). Conflating them — for example, expecting a reservation to expire the instant its window closes, event-style — would be a mistake; expiry is only ever as prompt as the sweep's own cadence, which is an operational parameter (`10-Deployment-Architecture.md`'s eventual concern), not an architectural guarantee this document makes.
+**Why the distinction matters:** a background job is a *when* mechanism (a schedule), while an event is a *what happened* mechanism (a fact). Conflating them — for example, expecting a reservation to expire the instant its window closes, event-style — would be a mistake; expiry is only ever as prompt as the sweep's own cadence, which is an operational parameter (`05-deployment/infrastructure-and-release.md`'s eventual concern), not an architectural guarantee this document makes.
 
 ## 7. Notification Flow
 
@@ -75,7 +75,7 @@ The complete path from a business event to a customer or worker actually receivi
 
 1. A module publishes a domain event as a normal consequence of its own committed transaction — `OrderPlaced`, `OrderStatusChanged`, `PaymentAuthorized`, `PaymentFailed`, `DeliveryAssigned`, `DeliveryCompleted`, and others, per each module's Published Events list.
 2. Notification consumes the event. It does not judge whether the event is "notification-worthy" beyond a fixed mapping of event type to message template and channel — that business judgment is expressed by which events exist and what they mean, not re-decided inside Notification (`module-catalog.md` Section 4.12's Boundaries).
-3. Notification calls the appropriate external channel — the SMS/OTP Provider or the Push Notification Service (`03-System-Context.md` Section 5) — and records the attempt, per DDD Section 14.5's "Notification History."
+3. Notification calls the appropriate external channel — the SMS/OTP Provider or the Push Notification Service (`02-context/system-context.md` Section 5) — and records the attempt, per DDD Section 14.5's "Notification History."
 4. Delivery status (sent, delivered, failed) is recorded against that attempt. A failure enters the retry path (Section 8); it never causes the original business event to be re-raised or the originating module to be informed that notification failed — business state must never depend on notification delivery succeeding (DDD Section 5.33's own constraint, restated here because it is the load-bearing rule of this whole flow).
 5. Where delivery is confirmed via the external channel's own callback, that confirmation is itself validated before being trusted (`security-and-compliance.md` Section 8's symmetric-trust rule applied to Notification specifically).
 
@@ -110,7 +110,7 @@ Today, events are dispatched **in-process**, within the single modular-monolith 
 
 **What changes on module extraction:** when a module is eventually pulled into its own independently deployed service (`module-communication.md` Section 11), its events can no longer be dispatched in-process to consumers living in a different process. At that point, the in-process dispatcher is replaced by a message broker (the specific technology is not decided here — a future ADR's job, once extraction is actually planned) for events crossing the new process boundary. Two things are designed to make this transition low-friction rather than a rewrite:
 
-- **The ownership and naming rules (Sections 2–3) do not change** — a broker-delivered `OrderPlaced` means exactly what an in-process `OrderPlaced` means today, with the same publisher, the same shape, the same consumers.
+- **The ownership and naming rules (Sections 2—3) do not change** — a broker-delivered `OrderPlaced` means exactly what an in-process `OrderPlaced` means today, with the same publisher, the same shape, the same consumers.
 - **Idempotency (Section 9) is already a requirement for every consumer today**, not something extraction newly demands — a message broker's own at-least-once delivery semantics (the near-universal default for this kind of infrastructure) are already what every consumer in this system is built to tolerate.
 
 The trade-off accepted today is a small one: in-process events give no delivery durability beyond the process's own lifetime (if the application crashes between publish and a consumer handling it, an in-memory-only dispatcher could lose that delivery). Whether the current implementation already backs this with a durable queue (versus a purely in-memory dispatcher) is an SDD-level/implementation decision this document does not make — but Section 9's idempotency requirement holds regardless of the answer, precisely so that decision can be made or changed later without touching every consumer's own logic.
@@ -119,6 +119,7 @@ The trade-off accepted today is a small one: in-process events give no delivery 
 
 - **Whether the in-process event dispatch is backed by a durable queue or a purely in-memory mechanism** (Section 11) is not decided here — an SDD-level choice, made safe either way by Section 9's idempotency requirement.
 - **Synchronous API conventions** (versioning mechanics beyond ADR-0017, error-response format, request/response validation detail) remain the original skeleton's Section 1 scope, substantially already covered by ADR-0017 and `module-communication.md` Section 4, but not consolidated into one dedicated reference document.
-- **External-integration retry/timeout/circuit-breaking patterns** specific to the Payment Gateway, SMS/OTP Provider, Push Notification Service, and Geocoding Provider (the original skeleton's Section 3) are not detailed in this document — Section 8 covers *event* retry; a provider-specific pattern (timeouts, circuit-breaking thresholds per external system) remains outstanding work, most naturally paired with `10-Deployment-Architecture.md` or a per-integration SDD.
-- **An integration inventory** (the original skeleton's Section 4, a table linking every external integration to its owning module and its SDD) is not produced here — `03-System-Context.md` Section 7 already provides the consolidated external-systems table this would otherwise duplicate; a dedicated inventory is only worth producing once per-integration SDDs exist to link to.
-- The module-catalog/module-communication Open Decisions (Support module ownership, Refund/Picking/Workforce/Pricing folding, Search's lack of a backing ADR, the Auth/User split) are unaffected by this document and remain open at the same status.
+- **External-integration retry/timeout/circuit-breaking patterns** specific to the Payment Gateway, SMS/OTP Provider, Push Notification Service, and Geocoding Provider (the original skeleton's Section 3) are not detailed in this document — Section 8 covers *event* retry; a provider-specific pattern (timeouts, circuit-breaking thresholds per external system) remains outstanding work, most naturally paired with `05-deployment/infrastructure-and-release.md` or a per-integration SDD.
+- **An integration inventory** (the original skeleton's Section 4, a table linking every external integration to its owning module and its SDD) is not produced here — `02-context/system-context.md` Section 7 already provides the consolidated external-systems table this would otherwise duplicate; a dedicated inventory is only worth producing once per-integration SDDs exist to link to.
+- Historical module-ownership questions were resolved by ADR-0020 and must not be treated as open by event or integration design.
+

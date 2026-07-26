@@ -1,4 +1,4 @@
-# System Context — Sakhari Ecom
+﻿# System Context — Sakhari Ecom
 
 | | |
 |---|---|
@@ -137,8 +137,8 @@ The DDD's per-entity "Module Owner" column (Section 4, Entity Catalog) is more g
 - A push notification delivered by the Push Notification Service directly to a client (Section 3/4) is never treated by a Platform as authoritative data in its own right — it is a wake-up/display trigger only. Whatever it announces (a new order status, a new dispatch assignment) is re-fetched through the normal, authenticated Platform → Backend path before being acted on, preserving the same "the Backend decides what's true" trust model even for the one integration that reaches a Platform without an intervening Backend request.
 
 ### External Integrations
-- **Payment Gateway** — authorization and capture across mada, card, and BNPL; owned by the Payments capability. Cash and card-on-delivery (collected by the Rider through the Worker App, per the DDD's Cash Remittance and Card-on-Delivery Record entities) are reconciled inside the Backend/Infrastructure and do not require this integration to complete an order (ADR-0010). Card-on-delivery terminal/POS settlement reconciliation with a payment terminal provider is explicitly unresolved (the DDD marks it "a Phase 1 spike") and is not treated as a committed external integration by this document.
-- **SMS/OTP Provider** — authentication OTPs, rider delivery-confirmation OTPs, and SMS delivery/status notifications; owned by the Identity & Access capability (OTP) and the Notifications capability (delivery/status messages, delivery-confirmation OTP) respectively.
+- **Moyasar Payment Gateway** — authorization and capture across mada, card, Apple Pay, and BNPL where supported; owned by the Payments capability (ADR-0022). Cash and card-on-delivery (collected by the Rider through the Worker App, per the DDD's Cash Remittance and Card-on-Delivery Record entities) are reconciled inside the Backend/Infrastructure and do not require this integration to complete an order (ADR-0010). Card-on-delivery terminal/POS settlement reconciliation with a payment terminal provider is explicitly unresolved (the DDD marks it "a Phase 1 spike") and is not treated as a committed external integration by this document.
+- **Unifonic SMS/OTP Provider** — authentication OTPs, rider delivery-confirmation OTPs, and SMS delivery/status notifications; owned by the Identity & Access capability (OTP) and the Notifications capability (delivery/status messages, delivery-confirmation OTP) respectively (ADR-0023).
 - **Push Notification Service** — outbound push delivery to installed mobile clients, dispatched by the Notifications capability. Confirmed for the Customer Mobile App by the DDD's Notification entity; the Worker App's use of the same channel is architecturally plausible (it is also a mobile client) but not yet explicitly confirmed by the SRD or DDD, and should not be assumed settled until it is. Browser notifications for the Customer Web App and email are both noted in the DDD as future channels, not current ones.
 - **Geocoding / Maps Provider** — address validation and geocoding metadata for customer delivery addresses (DDD Section 5.3, "Address validation depends on Google Maps/geocoding"). This document defaults to treating the integration as Backend-mediated, consistent with every other external integration (Principle 4.6); the DDD does not state whether address-entry UX instead calls a client-embedded maps SDK directly from the Customer Platform, which would be a narrow, deliberate exception to that default. This is flagged as an open point for `04-cross-cutting/integration-and-messaging.md` or a future ADR to settle, not asserted either way here.
 
@@ -185,11 +185,11 @@ All four are called exclusively by the Backend; neither Platform ever calls any 
 
 | External system | Used by | Purpose | Trust treatment |
 |---|---|---|---|
-| **Payment Gateway** (mada, card, BNPL) | Backend (Payments capability) only | Payment authorization and capture | Backend validates every response/callback before treating it as fact; never called by a Platform directly |
-| **SMS/OTP Provider** | Backend (Identity & Access, Notifications capabilities) only | Authentication OTPs, rider delivery-confirmation OTPs, SMS delivery/status notifications | Backend validates delivery/status callbacks; never called by a Platform directly |
+| **Moyasar Payment Gateway** (mada, card, Apple Pay, BNPL where supported) | Backend (Payments capability) only | Payment authorization and capture | Backend validates every response/callback before treating it as fact; never called by a Platform directly |
+| **Unifonic SMS/OTP Provider** | Backend (Identity & Access, Notifications capabilities) only | Authentication OTPs, rider delivery-confirmation OTPs, SMS delivery/status notifications | Backend validates delivery/status callbacks; never called by a Platform directly |
 | **Push Notification Service** | Backend (Notifications capability) outbound; delivers inbound directly to the Customer Mobile App (confirmed) and possibly the Worker App (unconfirmed) | Push delivery to installed mobile clients | Backend-initiated send is validated as any other external call; the inbound delivery to a client is never treated as authoritative data (see Section 5's Trust Boundaries note) |
 | **Geocoding / Maps Provider** | Backend by default (open point — see Section 3, Section 5) | Address validation and geocoding metadata for customer addresses | Backend validates/normalizes results before persisting; direct client-embedded use is a flagged, unresolved possibility, not a decision made by this document |
-| **Cloud Infrastructure Provider** | Infrastructure zone only | Managed hosting substrate for PostgreSQL, Redis, and Object Storage | Out of scope beyond noting the dependency exists — see `05-deployment/` |
+| **AWS `me-central-2` Cloud Infrastructure** | Infrastructure zone only | Managed hosting substrate for PostgreSQL/RDS, Redis, and Object Storage/S3 in Riyadh | Accepted production region/provider per ADR-0024 — see `05-deployment/` |
 
 With the one flagged exception (geocoding/maps, if later confirmed client-embedded) and the one inbound-only exception (push delivery), no external system in this table is ever reachable from the Customer Platform or the Operations Platform. Every external edge in the system originates from the Backend or, for hosting only, from Infrastructure. A payment terminal/POS settlement provider for card-on-delivery reconciliation is explicitly **not** included here — the DDD marks that integration "a Phase 1 spike," i.e. unresolved, and this document does not treat it as committed.
 
@@ -218,11 +218,11 @@ This section exists specifically so a future diagram — C4 Level 1 (System Cont
 | `store.postgresql` | PostgreSQL | Container (data store) | System of record (ADR-0003) |
 | `store.redis` | Redis | Container (data store) | Cache/coordination only (ADR-0004) |
 | `store.object-storage` | Object Storage | Container (data store) | Media/file assets (ADR-0016) |
-| `ext.payment-gateway` | Payment Gateway | External system | mada, card, BNPL |
-| `ext.sms-otp-provider` | SMS/OTP Provider | External system | OTP (auth + rider delivery-confirmation) + SMS notification delivery |
+| `ext.payment-gateway` | Moyasar Payment Gateway | External system | mada, card, BNPL |
+| `ext.sms-otp-provider` | Unifonic SMS/OTP Provider | External system | OTP (auth + rider delivery-confirmation) + SMS notification delivery |
 | `ext.push-notification-service` | Push Notification Service | External system | Outbound from Backend; inbound delivery to `app.customer-mobile` (confirmed) and possibly `app.worker-app` (unconfirmed) |
 | `ext.geocoding-provider` | Geocoding / Maps Provider | External system | Address validation/geocoding; Backend-mediated by default, client-embedded status unresolved |
-| `ext.cloud-provider` | Cloud Infrastructure Provider | External system | Hosting substrate for `zone.infrastructure` only |
+| `ext.cloud-provider` | AWS `me-central-2` Cloud Infrastructure | External system | Hosting substrate for `zone.infrastructure` only |
 
 ### Edges
 
@@ -248,3 +248,4 @@ This section exists specifically so a future diagram — C4 Level 1 (System Cont
 Edges `e13`–`e16` should be rendered distinctly (e.g., dashed) in any generated diagram until the two flagged open points — Worker App push (Section 4) and geocoding client-vs-backend mediation (Section 3/5) — are settled by a future document or ADR; every other edge in this model is a settled, confirmed fact as of this document's authoring.
 
 Internal-to-Backend edges (module-to-module, per ADR-0009/0010/0011) are intentionally **not** enumerated at this system-context level — they belong to `03-decomposition/service-decomposition.md`, which operates at the granularity where individual modules are distinguishable nodes. At the level of this document, `zone.backend` is a single node, and a Level 2 (Container) diagram produced from this section should render it as such; a future Level 3 (Component) diagram, sourced from `03-decomposition/`, is where module-to-module edges belong.
+
