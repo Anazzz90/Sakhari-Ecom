@@ -58,6 +58,8 @@ architecture/
 â”‚   â””â”€â”€ infrastructure-and-release.md      topology, CI/CD, release & rollback, DR
 â”œâ”€â”€ 06-quality-attributes/
 â”‚   â””â”€â”€ nfr-matrix.md                      measurable NFR targets, traced to the SRD
+â”œâ”€â”€ 07-coding-standards/
+â”‚   â””â”€â”€ coding-standards.md                repo/module structure, naming, testing, docs, code review & compliance checklists
 â”œâ”€â”€ decisions/                             Architecture Decision Records (ADRs)
 â”‚   â”œâ”€â”€ README.md                          ADR process, lifecycle, index
 â”‚   â”œâ”€â”€ template.md
@@ -91,8 +93,9 @@ The two root-level documents (`00-Architecture-Principles.md`, `01-Architecture-
 | `04-cross-cutting/reliability-and-performance.md` | Performance, Scalability & Reliability: performance philosophy, availability/failure-handling, caching, search, read/write optimization, queue usage, horizontal and database scaling, future microservice extraction, and capacity planning principles. |
 | `04-cross-cutting/technology-decisions.md` | Every technology in use (React Native, Next.js, React/Vite, NestJS, PostgreSQL, Redis, S3, JWT, OTP, Cloud Infrastructure, CDN), each with purpose, why chosen, alternatives considered, benefits, drawbacks, and future replacement strategy. Expands ADS Section 9 into full detail; complements rather than duplicates the technologies that already have a dedicated ADR. |
 | `05-deployment/environment-strategy.md` | The environment list (Development/Staging/Production), what varies between them, and the promotion path. |
-| `05-deployment/infrastructure-and-release.md` | Deployment Architecture: infrastructure components, networking, storage, cache, logging, monitoring, backup, disaster recovery, CI/CD, and a scaling-strategy overview (deep dive is `11-Performance-Scalability.md`, not yet authored). |
+| `05-deployment/infrastructure-and-release.md` | Deployment Architecture: infrastructure components, networking, storage, cache, logging, monitoring, backup, disaster recovery, CI/CD, and a scaling-strategy overview (deep dive is `04-cross-cutting/reliability-and-performance.md`). |
 | `06-quality-attributes/nfr-matrix.md` | The measurable scorecard every cross-cutting and module-level design is checked against. |
+| `07-coding-standards/coding-standards.md` | Repository/module structure, naming conventions, logging/validation/error-handling standards, testing philosophy, documentation standards, a code review checklist, and a separate architecture-compliance checklist. Expands `00-Architecture-Principles.md` Section 8 into concrete, checkable practice. |
 | `decisions/*` | The record of *why* â€” one immutable file per significant, hard-to-reverse choice. |
 | `diagrams/*` | Where and how diagrams will be organized once there's enough stable content to draw. |
 
@@ -124,6 +127,7 @@ Write in this order â€” each phase depends on the one before it:
 7. **Quality attributes** (`06-quality-attributes/nfr-matrix.md`) â€” written last among the numbered folders because it's a synthesis: it cites specific rows from cross-cutting and deployment documents as the mechanism for each target.
 8. **ADRs** â€” not a phase, a continuous practice. The first real ADRs should retroactively capture decisions the SRD and ADS already show were made (e.g., "why NestJS + RDS over Supabase," "why two customer clients, one worker app," "why a modular monolith over microservices at launch") so that reasoning is preserved in addressable, linkable form rather than buried in prose. New ADRs are added the moment a future significant decision is made, not batched.
 9. **Diagrams** â€” deliberately last. Diagrams drawn before decomposition and cross-cutting concerns stabilize become misleading almost immediately; see `diagrams/README.md`.
+10. **Engineering practice** (`07-coding-standards/`) â€” written after decomposition and cross-cutting concerns exist to expand into concrete practice; expands the Constitution's Section 8 (Coding Philosophy) rather than the ADS.
 
 As each numbered detail folder is authored in full, the corresponding ADS section is revisited and tightened into a true summary (with the detail document referenced, not duplicated) rather than left as the fuller placeholder text it starts as.
 
@@ -141,7 +145,8 @@ Not every document changes at the same rate. Treating them uniformly either make
 | `03-decomposition/data-ownership-map.md` | `04-cross-cutting/reliability-and-performance.md` |
 | `04-cross-cutting/security-and-compliance.md` (baseline; detail evolves) | `03-decomposition/service-decomposition.md` |
 | `05-deployment/environment-strategy.md` | `05-deployment/infrastructure-and-release.md` |
-| Accepted ADRs (individually immutable) | `06-quality-attributes/nfr-matrix.md` |
+| `07-coding-standards/coding-standards.md` (principles stable; tool-specific checklist items evolve) | `06-quality-attributes/nfr-matrix.md` |
+| Accepted ADRs (individually immutable) | |
 | | `02-context/system-context.md` / `glossary.md` (grow, don't restructure) |
 
 The ADS sits in an intentional middle position: its overall shape and section list are stable, but its content is expected to be *tightened* (not contradicted) as each detail document below it reaches full authorship â€” a summary getting more precise is not the same kind of change as a principle being overturned, and does not require an ADR unless the tightening reveals the original summary was substantively wrong.
@@ -201,5 +206,5 @@ This project is built by a solo developer working with AI coding assistants acro
 
 ## Current status
 
-`00-Architecture-Principles.md` (the Constitution), `01-Architecture-Design-Specification.md` (the ADS), `02-context/system-context.md`, `03-decomposition/module-catalog.md`, `03-decomposition/module-communication.md`, `04-cross-cutting/data-architecture.md`, `04-cross-cutting/security-and-compliance.md`, `04-cross-cutting/integration-and-messaging.md`, `04-cross-cutting/technology-decisions.md`, `04-cross-cutting/reliability-and-performance.md`, `05-deployment/environment-strategy.md`, `05-deployment/infrastructure-and-release.md`, and the full `decisions/` set (0001–0019) are fully authored. Every remaining detail document remains a skeleton: purpose, cross-document relationships, and stability classification are defined; full architectural content is not yet authored. Each subsequent document must be consistent with the Constitution's principles and the ADS's system description, or must justify a deviation through the ADR process. Several authored documents (module-catalog.md, module-communication.md, data-architecture.md) carry their own Open Decisions sections — see each document directly rather than assuming full closure. See `CHANGELOG.md` for the history of this folder's structure, and Section 4 above for what gets authored next.
+`00-Architecture-Principles.md` (the Constitution), `01-Architecture-Design-Specification.md` (the ADS), `02-context/system-context.md`, `03-decomposition/module-catalog.md`, `03-decomposition/module-communication.md`, `04-cross-cutting/data-architecture.md`, `04-cross-cutting/security-and-compliance.md`, `04-cross-cutting/integration-and-messaging.md`, `04-cross-cutting/technology-decisions.md`, `04-cross-cutting/reliability-and-performance.md`, `05-deployment/environment-strategy.md`, `05-deployment/infrastructure-and-release.md`, `07-coding-standards/coding-standards.md`, and the full `decisions/` set (0001–0019) are fully authored. Every remaining detail document remains a skeleton: purpose, cross-document relationships, and stability classification are defined; full architectural content is not yet authored. Each subsequent document must be consistent with the Constitution's principles and the ADS's system description, or must justify a deviation through the ADR process. Several authored documents (module-catalog.md, module-communication.md, data-architecture.md, coding-standards.md) carry their own Open Decisions sections — see each document directly rather than assuming full closure. See `CHANGELOG.md` for the history of this folder's structure, and Section 4 above for what gets authored next.
 
