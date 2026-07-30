@@ -1,0 +1,80 @@
+%% Illustrates: 04-cross-cutting/integration-and-messaging.md Sections 2-11; ADR-0029; ADR-0030 Section 8 (cross-instance)
+%% Last verified against source: 2026-07-30
+%% Technical Architecture - Event Architecture
+
+flowchart TD
+    subgraph PUB["Publisher (any of the 16 modules) - ownership-scoped (Section 2)"]
+        txn["Module-local transaction:\nentity change + outbox record\nwritten TOGETHER (ADR-0029)\nEither both commit or neither does"]
+    end
+
+    txn -->|"commit"| outbox[("Outbox table\n(PostgreSQL, owned by the SAME\nmodule that owns the entity -\ndata-architecture.md Section 16)")]
+    txn -.->|"rollback"| discard(["No outbox row written -\nno event without a committed fact"])
+
+    outbox --> dispatcher["Background Dispatcher\n(in-process today, ADR-0002/0029;\nmessage broker on future module\nextraction - Section 11)"]
+
+    subgraph CROSSINSTANCE["Cross-instance safety (horizontal scaling, ADR-0030)"]
+        direction LR
+        inst1["ECS task instance 1\ndispatcher"]
+        inst2["ECS task instance 2\ndispatcher"]
+        claim["Claim-based row locking\n(e.g. SELECT...FOR UPDATE SKIP LOCKED,\nSDD-level mechanism)\nnever both instances dispatch\nthe same event at once"]
+        inst1 --> claim
+        inst2 --> claim
+        claim --> outbox
+    end
+
+    dispatcher --> naming["EVENT NAMING (Section 3)\n&lt;Entity&gt;&lt;PastTenseVerb&gt;\ne.g. OrderPlaced, InventoryReserved\nfact, never an instruction"]
+
+    naming --> deliver{"Deliver to subscribed consumer(s)\n(a module subscribes to specific\nnamed events, not 'everything' -\nexcept Notification/Analytics'\ndocumented broad visibility)"}
+
+    deliver -->|"success"| markProcessed["Mark event processed for\nTHIS consumer\n(per-consumer, not global -\nother consumers may still be pending)"]
+
+    deliver -->|"consumer throws/times out"| retry["RETRY with exponential backoff\nAttempt count, last error, and\nnext-retry time recorded\nagainst the outbox row"]
+    retry -->|"retry succeeds"| markProcessed
+    retry -->|"bounded attempts exhausted\n(DDD 10.5: move to explicit\nfailure state, never silently\nrepeat an irreversible action)"| recordedFailure["RECORDED FAILURE STATE\nSurfaced to Notification's own\ndelivery-status history, or to\nAudit where consequential -\nNEVER a silent drop\n(no separate DLQ table/mechanism\nis documented - see rendering notes)"]
+
+    recordedFailure -.->|"outbox backlog alert\n(ADR-0031: oldest pending\nevent > 5 min = High,\n> 15 min = Critical)"| alertNote(["Ops alerting -\nsee observability-diagram.mmd"])
+
+    subgraph IDEMPOTENCY["Idempotency (Section 9) - consumer's responsibility, not the transport's"]
+        idem1["At-least-once delivery is the\nASSUMED baseline, not an edge case"]
+        idem2["Consumer determines whether it\nalready handled this occurrence\nBEFORE applying its effect"]
+        idem3["Same end state whether an event\nis received once or multiple times\n(e.g. Notification does not send\na 2nd SMS for a retried OrderPlaced)"]
+        idem1 --> idem2 --> idem3
+    end
+    markProcessed -.-> IDEMPOTENCY
+    retry -.-> IDEMPOTENCY
+
+    subgraph ORDERING["Ordering guarantees (Section 8)"]
+        ord1["Preserved: each publisher's own\ncommit order, per module"]
+        ord2["NOT guaranteed: global order\nacross different modules' events,\nor across retries interleaving\nwith new publishes"]
+    end
+    dispatcher -.-> ORDERING
+
+    subgraph EXCEPTION["One named synchronous exception (Section 7)"]
+        authDirect["Auth calls Notification's\nSendNotification SYNCHRONOUSLY\nfor OTP dispatch confirmation -\nNOT via the outbox/event path"]
+    end
+
+    subgraph AUDITPATH["Audit's dual invocation path (Section 5)"]
+        direction TB
+        auditA["Action already produces a domain\nevent for other reasons ->\nAudit CONSUMES that same event\n(no separate 'audit event')"]
+        auditB["Action has no natural event\n(e.g. an admin VIEWING sensitive\ndata) -> acting module calls\nRecordAuditEntry DIRECTLY, synchronously"]
+        auditNote2["Both paths: audit recording never\nblocks or fails the underlying\nbusiness operation"]
+        auditA --> auditNote2
+        auditB --> auditNote2
+    end
+    naming -.-> auditA
+
+    classDef publisher fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef outboxStyle fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+    classDef dispatch fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef fail fill:#fde6e0,stroke:#c0533c,color:#1a1a1a
+    classDef success fill:#e7f5ea,stroke:#3f8f52,color:#1a1a1a
+    classDef idempotent fill:#eaf2e4,stroke:#5a8f3c,color:#1a1a1a
+    classDef exception fill:#e0f3f3,stroke:#2f8f8f,color:#1a1a1a
+
+    class txn,discard publisher
+    class outbox,claim outboxStyle
+    class dispatcher,naming,deliver,inst1,inst2 dispatch
+    class retry,recordedFailure,alertNote fail
+    class markProcessed success
+    class idem1,idem2,idem3 idempotent
+    class authDirect,auditA,auditB,auditNote2 exception

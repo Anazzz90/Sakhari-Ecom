@@ -1,0 +1,77 @@
+%% Illustrates: 04-cross-cutting/security-and-compliance.md Sections 3-10; ADR-0012, ADR-0026, ADR-0027,
+%% ADR-0039, ADR-0040, ADR-0041
+%% Last verified against source: 2026-07-30
+%% Technical Architecture - Security Architecture
+
+flowchart TD
+    subgraph AUTHN["AUTHENTICATION FLOW (Section 4) - phone-based, OTP-driven, NO passwords anywhere"]
+        client(["Client (any actor:\nCustomer/Picker/Rider/Admin/Ops/Support)"]) -->|"1. request login code"| reqOtp["Auth: RequestOtp"]
+        reqOtp --> otpAbuse{"OTP ABUSE PROTECTION (ADR-0039)\nMax 5 requests/hour/phone,\n60s resend cooldown,\ndevice/IP throttling (independent)"}
+        otpAbuse -->|"limit exceeded"| lockout["30-min temporary lockout\nProgressive backoff applied"]
+        otpAbuse -->|"within limits"| syncNotif["2. Auth calls Notification.SendNotification\nSYNCHRONOUSLY (the ONE named exception -\nneeds dispatch confirmation before\ntelling client to expect a code)"]
+        syncNotif --> extSms["3. Notification -> external\nSMS/OTP Provider (Unifonic, ADR-0023)"]
+        extSms --> otpIssued["OTP issued: 6 digits,\nexpires in 5 minutes"]
+        otpIssued --> verifyOtp["4. Client submits code ->\nAuth: VerifyOtp\n(max 5 attempts per issued code)"]
+        verifyOtp -->|"invalid / expired"| otpFail["Verification fails\n(counts toward attempt ceiling)"]
+        verifyOtp -->|"valid"| issueTokens["5. Auth issues token pair\n+ establishes session"]
+        issueTokens --> publishAuth["Auth publishes:\nUserAuthenticated, OtpRequested\n(audit scope regardless of outcome)"]
+    end
+
+    subgraph JWTSEC["JWT (Section 5)"]
+        issueTokens --> accessToken["Access Token (JWT)\nTTL: 15 minutes\nCarries identity + role/permission claims\nVerified in-process via ValidateToken -\nNOT itself an authorization decision"]
+    end
+
+    subgraph REFRESH["Refresh Tokens & Session Management (Section 6)"]
+        issueTokens --> refreshToken["Refresh Token\nTTL: 7 days idle / 30 days absolute"]
+        refreshToken --> rotation["ROTATION ON USE:\neach refresh issues a NEW\naccess+refresh pair and\ninvalidates the one just used\n(single-use, never reused)"]
+        rotation --> reuseCheck{"Presented refresh token\nalready rotated (reused)?"}
+        reuseCheck -->|"yes - possible compromise"| invalidateFamily["Invalidate ENTIRE token family\nForce full OTP re-authentication"]
+        reuseCheck -->|"no"| newPair["New access/refresh pair issued"]
+        newPair --> accessToken
+        revoke["RevokeSession interface\n(logout, admin action,\nreuse-detection path)"] -.-> invalidateFamily
+        pgAuth[("PostgreSQL: authoritative for\nsessions/refresh-token families/\nrevocation state\n(Redis = accelerator cache only)")]
+        rotation -.-> pgAuth
+    end
+
+    subgraph AUTHZ["AUTHORIZATION FLOW / PERMISSION EVALUATION ORDER (Section 7, ADR-0041)"]
+        apiReq(["Any API request carrying\na valid access token"]) --> step1["STEP 1: ValidateToken\n(caller is authenticated)"]
+        step1 -->|"fail"| deny["DENY the request"]
+        step1 -->|"pass"| step2["STEP 2: RBAC check -\ndoes the caller's role grant\nthe NAMED permission?\n(convention: &lt;resource&gt;:&lt;operation&gt;,\ne.g. order:manage, refund:approve)"]
+        step2 -->|"fail"| deny
+        step2 -->|"pass"| storeScoped{"STEP 3: Is this operation\nSTORE-SCOPED by nature?\n(skipped for global ops like\nsettings:manage)"}
+        storeScoped -->|"no - not store-scoped"| allow["ALLOW - controller\ndelegates to module"]
+        storeScoped -->|"yes"| storeCheck["STORE-SCOPED RBAC (ADR-0041):\nresource's store must be in\ncaller's ASSIGNED STORES\n(Permission AND Store Scope required -\ne.g. order:manage for Store A does\nNOT authorize against Store B)"]
+        storeCheck -->|"store not assigned"| deny
+        storeCheck -->|"store assigned"| allow
+    end
+
+    accessToken -.-> apiReq
+
+    subgraph SCOPEDATA["Resource Scope data (Auth-internal, ADR-0041)"]
+        assignedStores["Assigned Stores + Assigned Roles +\nAssigned Permissions - carried in\nValidateToken's returned claims,\nNOT a second separate lookup\n(Store = current only instance of a\nmore general Resource Scope concept)"]
+    end
+    storeCheck -.-> assignedStores
+
+    subgraph STEPUP["STEP-UP MFA (Section 4A, ADR-0040)"]
+        allow --> highRisk{"Is this a HIGH-RISK operation?\n(refund:approve, permission changes,\nsettings:manage, Payment Ledger\nAdjustment/Chargeback, sensitive\naudit access) AND caller is one of\nthe 4 privileged roles (Super Admin,\nOps Manager, Finance, Support Lead)?"}
+        highRisk -->|"no"| proceed["Proceed to business logic"]
+        highRisk -->|"yes"| stepUpChallenge["InitiateStepUpChallenge\nTOTP or approved enterprise MFA\n(SDD-level provider choice)\nEvaluated FRESH every time -\nNEVER cached across a session"]
+        stepUpChallenge --> stepUpVerify{"VerifyStepUpChallenge"}
+        stepUpVerify -->|"fail"| stepUpFailed["StepUpAuthenticationFailed\npublished (audit scope)\nDENY the operation"]
+        stepUpVerify -->|"pass"| stepUpDone["StepUpAuthenticationCompleted\npublished (audit scope)"]
+        stepUpDone --> proceed
+    end
+
+    classDef authn fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef jwt fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef refresh fill:#eaf2e4,stroke:#5a8f3c,color:#1a1a1a
+    classDef authz fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+    classDef deny fill:#fde6e0,stroke:#c0533c,color:#1a1a1a
+    classDef stepup fill:#e0f3f3,stroke:#2f8f8f,color:#1a1a1a
+
+    class client,reqOtp,otpAbuse,lockout,syncNotif,extSms,otpIssued,verifyOtp,otpFail,issueTokens,publishAuth authn
+    class accessToken jwt
+    class refreshToken,rotation,reuseCheck,invalidateFamily,newPair,revoke,pgAuth refresh
+    class apiReq,step1,step2,storeScoped,storeCheck,allow,assignedStores authz
+    class deny deny
+    class highRisk,stepUpChallenge,stepUpVerify,stepUpFailed,stepUpDone,proceed stepup

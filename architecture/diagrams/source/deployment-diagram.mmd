@@ -1,0 +1,96 @@
+%% Illustrates: 05-deployment/infrastructure-and-release.md Sections 2-4, 12; ADR-0030, ADR-0024
+%% Last verified against source: 2026-07-30
+%% Technical Architecture - Deployment Diagram (Production)
+
+flowchart TB
+    subgraph CLIENTS["Clients"]
+        direction LR
+        custWeb["Customer Web App\n(Next.js, ADR-0007)"]
+        custMobile["Customer Mobile App\n(React Native, ADR-0006)"]
+        workerApp["Worker App\n(React Native, ADR-0006)"]
+        adminDash["Admin/Ops Dashboard\n(React Web, ADR-0008)"]
+    end
+
+    internet(["Internet"])
+    CLIENTS --> internet
+
+    subgraph AWS["AWS me-central-2 (Saudi-compliant region, ADR-0024)"]
+        cdn["CloudFront CDN\nEdge delivery for public,\ncacheable content only\n(product imagery, static assets)"]
+
+        subgraph VPC["VPC"]
+            subgraph PUBSUB["Public Subnets"]
+                alb["Application Load Balancer\n(ALB)"]
+            end
+
+            subgraph PRIVSUB["Private Subnets - never reachable\ndirectly from internet or client\n(system-context.md Section 6)"]
+                subgraph ECS["ECS Fargate Service"]
+                    direction LR
+                    task1["ECS Task 1\nNestJS modular monolith\n(ADR-0002) - single deployable"]
+                    task2["ECS Task 2\n(same artifact)"]
+                    taskN["ECS Task N\n(same artifact)"]
+                end
+
+                rds[("RDS PostgreSQL\nMulti-AZ in Production\n(ADR-0003, ADR-0030)\nSystem of record")]
+                redis[("ElastiCache Redis\n(ADR-0004, ADR-0030)\nCache/session/rate-limit/\ncoordination only")]
+            end
+        end
+
+        s3[("S3 Object Storage\n(ADR-0016)\nMedia/file assets - referenced,\nnever embedded, from PostgreSQL")]
+        secrets["AWS Secrets Manager\n(ADR-0030)\nJWT signing keys +\nexternal integration credentials"]
+    end
+
+    subgraph EXTSVC["External Services - reached ONLY from Backend\n(system-context.md Section 5)"]
+        direction LR
+        moyasar(["Moyasar Payment Gateway\n(ADR-0022)"])
+        unifonic(["Unifonic SMS/OTP\n(ADR-0023)"])
+        push(["Push Notification\nProvider"])
+        maps(["Google Maps /\nGeocoding Provider"])
+    end
+
+    internet -->|"HTTPS"| cdn
+    internet -->|"HTTPS/REST\nversioned API, ADR-0017"| alb
+    cdn -.->|"cache miss / dynamic"| alb
+
+    alb -->|"round-robin /\nleast-connections"| task1
+    alb --> task2
+    alb --> taskN
+
+    task1 -->|"SQL, transactional\nmodule-scoped writes"| rds
+    task2 --> rds
+    taskN --> rds
+    task1 -->|"Redis protocol"| redis
+    task2 --> redis
+    taskN --> redis
+    task1 -->|"object storage API"| s3
+    task2 --> s3
+    taskN --> s3
+    task1 -.->|"reads at startup/rotation"| secrets
+    task2 -.-> secrets
+    taskN -.-> secrets
+
+    task1 -->|"HTTPS, sole caller\n(Payment module)"| moyasar
+    task1 -->|"HTTPS, sole caller\n(Auth/Notification)"| unifonic
+    task1 -->|"HTTPS, sole caller\n(Notification)"| push
+    task1 -->|"HTTPS, sole caller\n(Store/User, backend-mediated)"| maps
+
+    subgraph SCALING["Future Horizontal Scaling (Section 12) - not yet triggered, shown for completeness"]
+        direction TB
+        scaleNote["Backend scales VERTICALLY FIRST\n(larger compute instance),\nHORIZONTALLY once justified by evidence\n(Constitution Section 6 - vertical/simple\nbefore horizontal/distributed)"]
+        scaleNote --> scaleECS["Additional ECS tasks added behind\nthe SAME ALB - safe because event\ndispatch is outbox-backed (ADR-0029),\nnot in-memory (ADR-0030 Consequences)"]
+        scaleECS --> scalePG["PostgreSQL scales vertically first,\nthen READ REPLICAS once READ load\n(not write load) justifies it"]
+    end
+    ECS -.-> SCALING
+
+    classDef client fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef edge fill:#f7ecdc,stroke:#b5822a,color:#1a1a1a
+    classDef compute fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef data fill:#e7f5ea,stroke:#3f8f52,color:#1a1a1a
+    classDef ext fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+    classDef scaling fill:#e0f3f3,stroke:#2f8f8f,color:#1a1a1a
+
+    class custWeb,custMobile,workerApp,adminDash client
+    class cdn,alb edge
+    class task1,task2,taskN compute
+    class rds,redis,s3,secrets data
+    class moyasar,unifonic,push,maps ext
+    class scaleNote,scaleECS,scalePG scaling

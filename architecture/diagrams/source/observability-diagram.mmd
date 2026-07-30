@@ -1,0 +1,92 @@
+%% Illustrates: 04-cross-cutting/observability-and-operations.md Sections 3-7; ADR-0031
+%% Last verified against source: 2026-07-30
+%% Technical Architecture - Observability Diagram
+%% NOTE: source documents use "correlation ID + request tracing" (Section 3), not the term
+%% "distributed tracing" - this is a single in-process deployable (ADR-0002), not a distributed
+%% system with network hops between modules. Rendered under the requested label with this
+%% clarification per rendering notes.
+
+flowchart TB
+    subgraph LOGGING["Logging Strategy (Section 3)"]
+        direction TB
+        structured["Structured logs (field-based)\nMinimum fields: timestamp, module,\noperation, outcome, correlation ID -\nsame set across all 16 modules"]
+        levels["Log levels: error / warning / info / debug\ndebug NOT enabled by default in Production"]
+        seclog["Security logs: auth success/failure,\nOTP abuse triggers (ADR-0039),\nstep-up attempts (ADR-0040),\nauthz denials (ADR-0041),\nsensitive-data access"]
+        structured --> levels
+        structured --> seclog
+    end
+
+    subgraph TRACING["Request Tracing via Correlation IDs (Section 3)\n(labeled 'Distributed tracing' in some usage -\nsee rendering notes: this is in-process tracing,\nno network hop between modules, ADR-0002)"]
+        direction TB
+        corrId["Correlation ID assigned at the\ncontroller/boundary layer\n(service-decomposition.md Section 7)"]
+        propagate["Propagated through every module\nAND every event that participates\nin fulfilling one request"]
+        reconstruct["Reconstructs the full synchronous-call +\nasync-event sequence a single request\ntriggered (e.g. PlaceOrder fanning out\nacross Order/Inventory/Payment/Delivery/\nNotification - module-communication.md\nSection 10)"]
+        corrId --> propagate --> reconstruct
+        reconstruct -.->|"complements, never substitutes for"| orderEvents["Order Event history /\nAudit Log (business record)"]
+    end
+
+    subgraph AUDITLOG["Audit Logging (distinct from application logs, Section 3/9)"]
+        direction TB
+        auditImmutable["Audit Log: immutable,\nretained long-term\nAnswers: 'who did what,\nwas it allowed'"]
+        appLogsDisposable["Application logs: disposable,\nretained short-term\nAnswers: 'what was the system\ndoing at this moment'"]
+        auditImmutable -.->|"NEVER conflated with"| appLogsDisposable
+    end
+
+    subgraph MONITORING["Monitoring - 3 distinct health categories (Section 4)"]
+        direction LR
+        sysHealth["SYSTEM HEALTH\nIs infrastructure functioning?\n(Backend compute, PostgreSQL,\nRedis, network path)"]
+        appHealth["APPLICATION HEALTH\nIs Backend logic behaving correctly?\n(modules completing ops, transactions\ncommitting, events flowing)"]
+        bizHealth["BUSINESS HEALTH\nIs the business functioning?\n(orders placed/fulfilled, payments\nsucceeding, deliveries completing)\nCan be 'app healthy' but\n'business unhealthy' - distinct concerns"]
+    end
+
+    subgraph METRICS["Metrics (Section 5) - each maps to a named architectural concern"]
+        direction TB
+        m1["API latency -> Application"]
+        m2["Checkout success rate -> Business"]
+        m3["Inventory reservation failures -> App/Business"]
+        m4["Payment failures -> Business"]
+        m5["Notification failures -> Application"]
+        m6["Queue sizes (outbox backlog) -> Application"]
+        m7["Cache hit ratio -> System/Application"]
+        m8["Database performance -> System"]
+        m9["Background job success -> Application"]
+        m10["Batch formation rate /\nBatch-to-individual SLA delta\n(ADR-0034) -> Business"]
+    end
+    MONITORING --> METRICS
+
+    subgraph HEALTHCHECK["Health Checks (Section 6)"]
+        direction TB
+        liveness["LIVENESS\nIs the process running/responding?\n(only answers: should this\ninstance be restarted)"]
+        readiness["READINESS\nCan it serve traffic correctly\nRIGHT NOW? (finished startup,\ncan reach dependencies)\nLive-but-not-ready = no traffic"]
+        depHealth["DEPENDENCY HEALTH\nCan Backend reach PostgreSQL,\nRedis, external systems?\n'I am broken' vs\n'something I depend on is broken'"]
+        liveness --> readiness --> depHealth
+    end
+    sysHealth --> HEALTHCHECK
+
+    subgraph ALERTING["Alerting Philosophy - calibrated to ONE operator (Section 7)"]
+        direction TB
+        critical["CRITICAL: transactional core failing\nnow (checkout/payment/reservation broken)\nImmediate response, any time of day\ne.g. checkout success rate < 95%\nfor 10 min (ADR-0031)"]
+        high["HIGH: capability degraded, core still\nworks, or Critical is imminent\nSame-day response\ne.g. outbox backlog > 5 min (ADR-0031)"]
+        medium["MEDIUM: consumer-tier degraded\n(Notification/Analytics/Search)\nWithin normal working day"]
+        low["LOW: informational trend,\nno urgency\nReviewed periodically"]
+        critical --> high --> medium --> low
+        severityNote["Severity assigned by BUSINESS\nCONSEQUENCE, never by which\nmodule/layer is technically involved"]
+    end
+    bizHealth --> ALERTING
+    METRICS -.-> ALERTING
+
+    classDef logging fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef tracing fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef audit fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+    classDef monitoring fill:#eaf2e4,stroke:#5a8f3c,color:#1a1a1a
+    classDef metrics fill:#e7f5ea,stroke:#3f8f52,color:#1a1a1a
+    classDef health fill:#e0f3f3,stroke:#2f8f8f,color:#1a1a1a
+    classDef alert fill:#fde6e0,stroke:#c0533c,color:#1a1a1a
+
+    class structured,levels,seclog logging
+    class corrId,propagate,reconstruct,orderEvents tracing
+    class auditImmutable,appLogsDisposable audit
+    class sysHealth,appHealth,bizHealth monitoring
+    class m1,m2,m3,m4,m5,m6,m7,m8,m9,m10 metrics
+    class liveness,readiness,depHealth health
+    class critical,high,medium,low,severityNote alert

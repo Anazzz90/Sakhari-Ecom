@@ -1,0 +1,120 @@
+%% Illustrates: 03-decomposition/data-ownership-map.md Sections 12 (all 16 modules), 13 (Ownership Matrix)
+%% Last verified against source: 2026-07-30
+%% Technical Architecture - Data Ownership Diagram
+%% NOTE: cross-module reference edges are a REPRESENTATIVE selection for legibility,
+%% not the full Section 13 matrix (30+ entities x readers) - see rendering notes.
+
+flowchart TB
+    subgraph FOUNDATION["Foundation - Identity & Profile"]
+        direction LR
+        subgraph Auth_M["Auth"]
+            authTbl["Tables: users (identity fields),\nsessions, refresh_tokens,\nuser_store_assignments (ADR-0041)\nAggregate root: User\n(Session/RefreshToken/StoreScope\nare dependent, User-scoped)"]
+        end
+        subgraph User_M["User"]
+            userTbl["Tables: customer_profiles, addresses,\nworker_profiles, worker_capabilities,\nshifts, worker_availability\nTWO aggregates: Customer Profile (root)\n+ Worker Profile (root) - never\ncross-referenced to each other"]
+        end
+        subgraph Store_M["Store"]
+            storeTbl["Tables: stores, service_zones\nAggregate root: Store\n(Service Zone is dependent child)"]
+        end
+    end
+
+    subgraph CATALOGTIER["Catalog & Discovery"]
+        direction LR
+        subgraph Catalog_M["Catalog"]
+            catTbl["Tables: categories, brands,\nproducts, product_images\nAggregate root: Product\n(Category/Brand are independent\nreference aggregates)"]
+        end
+        subgraph Search_M["Search"]
+            searchTbl["NO owned tables\n(derived, rebuildable index only -\nnot an authoritative aggregate)"]
+        end
+    end
+
+    subgraph COMMERCE["Commerce Transaction"]
+        direction LR
+        subgraph Cart_M["Cart"]
+            cartTbl["Table: carts\nAggregate root + sole entity: Cart"]
+        end
+        subgraph Inventory_M["Inventory"]
+            invTbl["Tables: inventory_items,\ninventory_reservations,\ninventory_ledger\nAggregate root: Inventory Item;\nReservation + Ledger are related,\nnot nested"]
+        end
+        subgraph Promotion_M["Promotion"]
+            promoTbl["Tables: promotions, promo_codes,\npromotion_usages\nAggregate root: Promotion\n(Promo Code is dependent child)"]
+        end
+        subgraph Order_M["Order"]
+            orderTbl["Tables: orders, order_items,\norder_events, price_snapshots\nAggregate root: Order -\n'central transactional aggregate'\n(DDD 6.4) - but does NOT own\nInventory/Payment/Promotion/Delivery data"]
+        end
+        subgraph Payment_M["Payment"]
+            payTbl["Tables: payments, payment_history,\ncash_remittances,\ncard_on_delivery_records, refunds,\npayment_ledger (ADR-0037)\nAggregate root: Payment;\nPayment Ledger mirrors Inventory Ledger"]
+        end
+    end
+
+    subgraph FULFILL["Fulfillment"]
+        subgraph Delivery_M["Delivery"]
+            delTbl["Tables: picking_sessions,\npicking_session_items,\ndelivery_assignments,\nrider_locations, delivery_batches,\ndelivery_stops (last two, ADR-0034)\nTHREE aggregates: Picking Session,\nDelivery Assignment, Delivery Batch"]
+        end
+    end
+
+    subgraph SUPPORTCOMMS["Support & Communication"]
+        direction LR
+        subgraph Notification_M["Notification"]
+            notifTbl["Table: notifications\nAggregate root + sole entity"]
+        end
+        subgraph Support_M["Support"]
+            suppTbl["Tables: support_tickets,\nsupport_ticket_comments\nAggregate root: Support Ticket"]
+        end
+    end
+
+    subgraph PLATFORM["Platform & Governance"]
+        direction LR
+        subgraph Analytics_M["Analytics"]
+            anaTbl["Tables: report_rollups,\nanalytics_snapshots\nTwo independent aggregates,\nboth explicitly REBUILDABLE"]
+        end
+        subgraph Audit_M["Audit"]
+            audTbl["Table: audit_logs\nAggregate root, append-only,\nno children - never rebuilt"]
+        end
+        subgraph Settings_M["Settings"]
+            setTbl["Table: settings\nAggregate root + sole entity"]
+        end
+    end
+
+    %% Cross-module references - REPRESENTATIVE set from Section 13's Ownership Matrix
+    User_M -->|"Interface: identity resolution"| Auth_M
+    Cart_M -->|"Interface: validate items"| Catalog_M
+    Cart_M -->|"Interface: scope to customer"| User_M
+    Order_M -->|"Interface: read cart"| Cart_M
+    Order_M -->|"Interface: reserve stock (sync)"| Inventory_M
+    Order_M -->|"Interface: initiate payment (sync)"| Payment_M
+    Order_M -->|"Interface: eligibility/discount"| Promotion_M
+    Order_M -->|"Interface: customer/address context"| User_M
+    Order_M -->|"Interface: serving store"| Store_M
+    Payment_M -->|"Interface: order/amount context,\nPrice Snapshot for refunds (ADR-0038)"| Order_M
+    Inventory_M -->|"Interface: scope to store"| Store_M
+    Inventory_M -->|"Interface: validate product"| Catalog_M
+    Search_M -.->|"Event (derived, non-authoritative)"| Catalog_M
+    Search_M -.->|"Event (derived, optional)"| Inventory_M
+    Delivery_M -->|"Interface: fulfillment-readiness\ncontext"| Order_M
+    Delivery_M -->|"Interface: eligible pickers/riders"| User_M
+    Delivery_M -->|"Interface: scope to store"| Store_M
+    Support_M -->|"Interface: order context"| Order_M
+    Support_M -->|"Interface: refund via IssueRefund"| Payment_M
+    Support_M -->|"Interface: delivery context"| Delivery_M
+    Support_M -->|"Interface: profile context"| User_M
+    Notification_M -.->|"Event (broad, documented\nexception - nearly every module)"| Order_M
+    Analytics_M -.->|"Event (broad, documented\nexception - nearly every module)"| Payment_M
+    Audit_M -.->|"Event OR direct RecordAuditEntry call\n(written TO by every module,\nnever a caller of any module)"| Order_M
+    Order_M -->|"Interface: read-only config\n(ADR-0033, one of 9 readers)"| Settings_M
+    Payment_M -->|"Interface: read-only config\n(ADR-0033)"| Settings_M
+    Delivery_M -->|"Interface: batching thresholds\n(ADR-0033/0034)"| Settings_M
+
+    classDef foundation fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef catalog fill:#eaf2e4,stroke:#5a8f3c,color:#1a1a1a
+    classDef commerce fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+    classDef fulfillment fill:#fde6e0,stroke:#c0533c,color:#1a1a1a
+    classDef support fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef platform fill:#e0f3f3,stroke:#2f8f8f,color:#1a1a1a
+
+    class authTbl,userTbl,storeTbl foundation
+    class catTbl,searchTbl catalog
+    class cartTbl,invTbl,promoTbl,orderTbl,payTbl commerce
+    class delTbl fulfillment
+    class notifTbl,suppTbl support
+    class anaTbl,audTbl,setTbl platform
