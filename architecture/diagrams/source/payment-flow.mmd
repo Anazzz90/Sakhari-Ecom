@@ -1,0 +1,79 @@
+%% Illustrates: module-catalog.md Section 4.9, ADR-0022, ADR-0035, ADR-0037, ADR-0038;
+%% SRD Section 10.2 (Payment State Machine), 10.8 (Refund State Machine); data-architecture.md Section 8A
+%% Last verified against source: 2026-07-30
+%% Business Flow - Payment Flow
+
+flowchart TD
+    init(["Order calls Payment's\nInitiatePayment (sync, checkout step)"]) --> pending["Payment state: Pending\n(Payment-owned transaction, ADR-0021)"]
+
+    pending --> methodChoice{"Payment method\n(selected at checkout)"}
+
+    subgraph ONLINE["Online Payment (mada / card / Apple Pay / BNPL) - ADR-0022"]
+        methodChoice -->|"Online"| gwCall["Payment -> Moyasar Payment Gateway\n(sole external caller, ADR-0022)"]
+        gwCall -->|"verified gateway response"| authState["State: Authorized"]
+        authState -->|"PaymentAuthorized published"| captureState["State: Captured\n(verified gateway capture)"]
+        gwCall -.->|"decline/timeout (ADR-0032\nretry/circuit-breaker)"| onlineFail["State: Failed\nPaymentFailed published"]
+    end
+
+    subgraph COD["Cash on Delivery"]
+        methodChoice -->|"COD"| codPending["State: COD Pending\n(checkout flow, no online capture)"]
+        codPending -.->|"rider collects cash at drop-off\n(ADR-0035: Delivery publishes\nDeliveryCompletedWithPayment;\nOrder forwards to Payment)"| codCollect["Payment: RecordCashCollection\n(Payment-owned txn)"]
+    end
+
+    subgraph CARDCOD["Card on Delivery (POS/terminal)"]
+        methodChoice -->|"Card-on-Delivery"| cardPending["State: Card-on-Delivery Pending\n(checkout flow)"]
+        cardPending -.->|"rider/terminal collects at drop-off\n(ADR-0035, same forwarding path)"| cardCollect["Payment: RecordCardOnDeliveryCollection\n(Payment-owned txn)\nMVP: manual settlement import +\ndiscrepancy review (ADR-0032/0033)"]
+    end
+
+    captureState -->|"PaymentCaptured published"| paidState
+    codCollect -->|"CashRemittanceRecorded published"| paidState
+    cardCollect --> paidState
+    paidState["State: Paid\n(payment obligation satisfied)"]
+
+    paidState --> ledgerBranch
+
+    subgraph LEDGER["Payment Ledger (ADR-0037) - append-only, immutable, mirrors Inventory Ledger"]
+        ledgerBranch["Every financial movement writes\na Payment Ledger entry:\nPayment Authorized, Payment Captured,\nCOD Collected, Card-on-Delivery Collected,\nRefund Issued, Refund Reversed,\nSettlement Recorded, Adjustment, Chargeback"]
+        ledgerBranch --> ledgerNote["Payment's current authorized/captured/\nrefunded totals derive from ledger history\n(fast-path 'what is true now')"]
+    end
+
+    ledgerBranch -->|"PaymentLedgerRecorded published\n(entry per movement)"| settleRecon
+
+    subgraph RECON["Settlement & Reconciliation (ADR-0037, data-architecture.md 8A)"]
+        settleRecon["Scheduled reconciliation job compares\nledger movements against provider\nsettlement reports (Moyasar, ADR-0022;\nPOS/terminal, ADR-0032)"]
+        settleRecon -->|"match"| settled["Settlement Recorded\n(ledger entry)"]
+        settleRecon -->|"discrepancy"| flagged["Flagged for manual review\n(never silently accepted/auto-corrected)"]
+    end
+
+    paidState --> refundTrigger{"Refund needed?\n(Order-owned eligibility rules,\nor Support-initiated - ADR-0033)"}
+
+    refundTrigger -->|"no"| doneState(["No refund - Payment lifecycle ends at Paid"])
+
+    subgraph REFUND["Refund / Partial Refund (SRD 10.8, ADR-0038 line-item aware)"]
+        refundTrigger -->|"yes"| requested["Refund state: Requested\n(references Order Item(s) + quantity +\nOriginal Unit Price from Order's\nPrice Snapshot - NEVER current catalog price)"]
+        requested --> pendingApproval["State: Pending Approval"]
+        pendingApproval -->|"rejected"| rejected["State: Rejected (terminal)"]
+        pendingApproval -->|"approved\n(Order rule or authorized Support flow)"| approved["State: Approved"]
+        approved --> processing["State: Processing\n(RefundOrchestrationService computes\nper-line breakdown: proportional or\nfull-line reversal - ADR-0038)"]
+        processing -->|"settlement/manual resolution fails\nRefundFailed published"| refundFailed["State: Failed (retryable)"]
+        refundFailed --> processing
+        processing -->|"success\nRefundIssued published"| completed["State: Completed (terminal)"]
+        completed --> cumCheck["Cumulative refunded amount across\nALL non-rejected/cancelled refunds\nfor this order must never exceed\nthe order's paid total (ADR-0038)"]
+        cumCheck -.->|"multiple partial refunds\nsupported per order"| requested
+    end
+
+    completed -->|"Refund Issued / Refund Reversed\nledger entry"| ledgerBranch
+
+    classDef online fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef cod fill:#eaf2e4,stroke:#5a8f3c,color:#1a1a1a
+    classDef cardcod fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+    classDef ledger fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef refund fill:#fde6e0,stroke:#c0533c,color:#1a1a1a
+    classDef recon fill:#e0f3f3,stroke:#2f8f8f,color:#1a1a1a
+
+    class gwCall,authState,captureState,onlineFail online
+    class codPending,codCollect cod
+    class cardPending,cardCollect cardcod
+    class ledgerBranch,ledgerNote,settled ledger
+    class requested,pendingApproval,approved,processing,refundFailed,completed,cumCheck,rejected refund
+    class settleRecon,flagged recon

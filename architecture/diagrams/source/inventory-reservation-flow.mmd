@@ -1,0 +1,67 @@
+%% Illustrates: 04-cross-cutting/data-architecture.md Sections 6-8, 13; DDD Section 9.2, 15.1, 5.14-5.15;
+%% SRD Section 10.3 (Inventory Reservation State Machine)
+%% Last verified against source: 2026-07-30
+%% Business Flow - Inventory Reservation Flow
+
+flowchart TD
+    start(["Order calls Inventory's\nReserveStock (sync, ADR-0010/0021)"]) --> precheck
+
+    subgraph REDIS["Redis - short-lived coordination only (ADR-0004)"]
+        precheck["Acquire short-lived Redis lock\non the Inventory Item\n(DDD 10.1/10.6 named race:\ntwo customers reserving same last unit)"]
+    end
+
+    subgraph CONCURRENT["Concurrent reservation handling"]
+        direction LR
+        reqA["Request A: ReserveStock\n(Product X, Store 1)"]
+        reqB["Request B: ReserveStock\n(Product X, Store 1) - concurrent"]
+        reqA --> precheck
+        reqB -->|"queues behind the SAME lock\n(never in reverse row order -\ndata-architecture.md Section 13\nlocking-order rule)"| precheck
+    end
+
+    precheck --> pgcheck{"PostgreSQL:\nInventory Item row locked,\navailable quantity checked\n(lock order: Item row -> Reservation row(s) -> Ledger insert)"}
+
+    pgcheck -->|"insufficient available quantity"| failCreate["Reservation NOT created.\nInventoryReservationFailed published"]
+    failCreate --> failEnd(["Return failure to Order\n(Order performs compensation -\nsee checkout-sequence.mmd)"])
+
+    pgcheck -->|"quantity available"| created["State: Created\n(Reservation request recorded)"]
+    created --> reserved["State: Reserved\n(PostgreSQL-committed hold;\navailable qty reduced,\non-hand qty UNCHANGED - DDD Section 6/7)"]
+    reserved -->|"InventoryReserved published"| reservedEvt(["Return success to Order"])
+
+    reserved --> branch{"What happens to the order?"}
+
+    branch -->|"Packing completion\n(DDD 9.4)"| consume["COMMIT / CONSUME reservation\nApplication Service: ConfirmReservationConsumption"]
+    subgraph CONSUME_TXN["Single Inventory-owned transaction (all-or-nothing)"]
+        consume --> deduct["On-hand quantity DECREASES"]
+        deduct --> closeRes["Reservation closed -> State: Consumed"]
+        closeRes --> ledgerWrite["INVENTORY LEDGER ENTRY recorded\n(append-only, immutable - data-architecture.md Section 8)\nledger insert is LAST in the lock order"]
+        ledgerWrite --> ledgerEvt(["InventoryLedgerRecorded +\nInventoryLevelChanged published"])
+    end
+
+    branch -->|"Order/item cancelled or\nsupport action before consumption"| release["RELEASE reservation\nApplication Service: ReleaseReservation"]
+    release --> restoreQty["Available quantity RESTORED\n(on-hand quantity never touched -\nnothing was ever physically removed)"]
+    restoreQty --> stateReleased["State: Released (terminal)\nNO ledger entry required\n(data-architecture.md Section 7)"]
+    stateReleased --> releaseEvt(["InventoryReservationReleased published"])
+
+    branch -->|"Reservation exceeds checkout/\nsubstitution window (no action taken)"| expiryJob
+
+    subgraph BGJOB["Background job: Reservation Expiry (DDD Section 15.1)"]
+        expiryJob["Scheduled sweep finds reservations\npast their allowed window\n(NOT a synchronous check - Inventory\nnever blocks waiting to see if used)"]
+        expiryJob --> expired["State: Expired"]
+        expired --> resolveExpiry["Resolved to Released or Cancelled\n(SRD 10.3: Expired must resolve,\nnever a terminal state itself)"]
+        resolveExpiry --> restoreQty
+    end
+
+    branch -->|"Substitution / partial availability\nduring picking"| adjusted["State: Adjusted\n(Picking/Inventory workflow,\nitem-level history preserved)"]
+    adjusted --> branch
+
+    classDef redis fill:#f7ecdc,stroke:#b5822a,color:#1a1a1a
+    classDef pg fill:#e7f5ea,stroke:#3f8f52,color:#1a1a1a
+    classDef fail fill:#fde6e0,stroke:#c0533c,color:#1a1a1a
+    classDef ledger fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef bgjob fill:#e0f3f3,stroke:#2f8f8f,color:#1a1a1a
+
+    class precheck,reqA,reqB redis
+    class pgcheck,created,reserved,consume,deduct,closeRes,release,restoreQty,stateReleased,adjusted pg
+    class failCreate,failEnd fail
+    class ledgerWrite,ledgerEvt ledger
+    class expiryJob,expired,resolveExpiry bgjob

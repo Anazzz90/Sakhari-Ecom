@@ -1,0 +1,74 @@
+%% Illustrates: 03-decomposition/module-communication.md Section 10 (Example 1), DDD Section 9.1/9.2,
+%% ADR-0010, ADR-0021, ADR-0029
+%% Last verified against source: 2026-07-30
+%% Business Flow - Checkout Sequence
+
+sequenceDiagram
+    actor Customer
+    participant Order
+    participant Cart
+    participant Promotion
+    participant Inventory
+    participant Payment
+    participant Outbox as Transactional Outbox
+    participant Delivery
+    participant Notification
+
+    Customer->>Order: REST PlaceOrder (versioned API, ADR-0017)
+    Order->>Cart: sync GetCart
+    Cart-->>Order: cart items (customer's selection)
+
+    Note over Order: Order-record creation begins\n(Order-owned transaction, ADR-0021)
+
+    Order->>Promotion: sync EvaluatePromotionEligibility
+    Note right of Promotion: PROMOTION VALIDATION
+    Promotion-->>Order: eligibility result + discount (or none)
+
+    Order->>Order: Create Order + Order Items + Price Snapshot\n(own txn, not-yet-confirmed state - DDD 9.1)
+    Note right of Order: ORDER CREATION
+
+    Order->>Inventory: sync ReserveStock (Inventory-owned txn, ADR-0010/0021)
+    Note right of Inventory: INVENTORY RESERVATION\nRedis lock precheck, then\nPostgreSQL-committed reservation (DDD 9.2)
+
+    alt Reservation fails (e.g. out of stock)
+        Inventory-->>Order: InventoryReservationFailed
+        Note over Order: FAILURE HANDLING + COMPENSATION (ADR-0021)\nOrder cancels the pending order it just created.\n"No confirmed order should remain" (DDD 9.1 rollback expectation).
+        Order->>Order: Order state -> Cancelled (compensating action, own txn)
+        Order-->>Customer: checkout failed (stock unavailable)
+    else Reservation succeeds
+        Inventory-->>Order: InventoryReserved
+        Order->>Payment: sync InitiatePayment (Payment-owned txn, ADR-0021)
+        Note right of Payment: PAYMENT\nOnline: Authorized/Pending via Moyasar (ADR-0022)\nCOD / Card-on-Delivery: recorded Pending\nwithin same transactional flow (ADR-0010)
+
+        alt Payment initiation fails
+            Payment-->>Order: PaymentFailed (initiation rejected)
+            Note over Order: FAILURE HANDLING + COMPENSATION (ADR-0021)\nOrder compensates: instructs Inventory to\nReleaseReservation, then cancels the order.
+            Order->>Inventory: sync ReleaseReservation (compensating call)
+            Inventory-->>Order: InventoryReservationReleased
+            Order->>Order: Order state -> Cancelled (compensating action)
+            Order-->>Customer: checkout failed (payment could not be initiated)
+        else Payment initiation accepted (Authorized / COD-Pending / CoD-Pending)
+            Order->>Order: Order state -> Confirmed\n(payment state recorded in same flow, ADR-0010)
+            Order->>Outbox: write OrderPlaced\n(same txn as Order record, ADR-0029)
+            Order-->>Customer: checkout succeeded (order confirmed)
+
+            Note over Outbox: EVENT PUBLISHING (ADR-0029)\nOutbox row committed atomically with the\nentity change; background dispatcher delivers\nto consumers with retry/backoff. Publisher never\nwaits on a consumer's reaction.
+            Outbox-->>Notification: dispatch OrderPlaced (async)
+            Notification->>Notification: SendNotification (order confirmation)
+
+            par Later, decoupled from the original request/response (gateway async resolution)
+                Payment->>Outbox: write PaymentAuthorized / PaymentFailed\n(gateway callback resolved, Payment-owned txn)
+                Outbox-->>Order: dispatch PaymentAuthorized / PaymentFailed (async)
+                alt PaymentAuthorized
+                    Order->>Order: update order status accordingly
+                else PaymentFailed (post-initiation failure)
+                    Note over Order: FAILURE HANDLING (async path)\nOrder transitions toward Payment Failed / Cancelled\nper SRD 10.1/10.2 - resolved by Order's own\nstate machine, not a new compensation call.
+                    Order->>Order: Order state -> Payment Failed
+                end
+            end
+
+            Order->>Outbox: write OrderReadyForFulfillment\n(once payment confirmed)
+            Outbox-->>Delivery: dispatch OrderReadyForFulfillment (async)
+            Delivery->>Delivery: begin picking-session orchestration\n(Delivery-owned txn, outside Order's request/response cycle)
+        end
+    end

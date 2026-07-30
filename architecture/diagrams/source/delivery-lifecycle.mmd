@@ -1,0 +1,68 @@
+%% Illustrates: SRD Section 10.5 (Delivery Assignment State Machine), 10.5.1 (Batching), BR-016, BR-020, BR-021;
+%% module-catalog.md Section 4.11, ADR-0034, ADR-0035, ADR-0036
+%% Last verified against source: 2026-07-30
+%% Business Flow - Delivery Lifecycle
+
+flowchart TD
+    trigger(["OrderReadyForFulfillment consumed\n(from Order, async via Outbox)"]) --> created["Delivery Assignment created\nState: Created\n(order becomes packed)"]
+
+    created --> batchEval{"DISPATCH: Batch formation\nevaluation (ADR-0034,\nSettings-owned eligibility rules)\nsame store, proximity, readiness-time\ntolerance, rider capacity, SLA headroom"}
+
+    batchEval -->|"no eligible partner\nfound before individual\nrider-assignment timeout"| singleAssign["Single-order dispatch"]
+    batchEval -->|"eligible pair found\n(max 2 orders, MVP)"| batchAssign["Batched dispatch\n- see delivery-batch.mmd for\nfull batch entity/lifecycle detail"]
+
+    singleAssign --> assigned["State: Assigned\n(rider offered the delivery)"]
+    batchAssign --> assigned
+
+    assigned -->|"DRIVER ASSIGNMENT:\nrider accepts within timeout"| accepted["State: Accepted"]
+    assigned -->|"rider declines"| rejected["State: Rejected\nDeliveryRejected published (ADR-0036)"]
+    assigned -->|"no response within timeout"| expired["State: Expired"]
+
+    rejected -->|"returns to SAME store's\nrider pool (BR-020, BR-021)\nOrder does NOT consume\nDeliveryRejected - Delivery-internal only"| assigned
+    expired -->|"returns to same store rider pool"| assigned
+
+    accepted -->|"PICKUP: rider collects\norder from store"| pickedUp["State: Picked Up"]
+    accepted -->|"rider becomes unavailable\nbefore pickup"| rejected
+
+    pickedUp --> outForDelivery["State: Out for Delivery\n(rider en route)"]
+
+    outForDelivery -->|"DELIVERY: OTP/proof\naccepted at drop-off"| delivered["State: Delivered (terminal)"]
+    outForDelivery -->|"delivery cannot be completed\n(customer unavailable, address\nunreachable, rejected, vehicle\nfailure, safety issue - SRD 10.5)"| failed["State: Failed"]
+
+    delivered --> paymentCheck{"Was this a cash or\ncard-on-delivery order?"}
+    paymentCheck -->|"yes, collection successful"| completedWithPayment["DeliveryCompleted +\nDeliveryCompletedWithPayment\nboth published (ADR-0035)\nOrder forwards collection fact to\nPayment's RecordCashCollection /\nRecordCardOnDeliveryCollection"]
+    paymentCheck -->|"no (already paid online,\nor no collection due)"| completedOnly["DeliveryCompleted published only"]
+
+    completedWithPayment --> orderCompleted(["Order consumes DeliveryCompleted /\nDeliveryCompletedWithPayment ->\nadvances Order's own state machine"])
+    completedOnly --> orderCompleted
+
+    failed -->|"DeliveryFailed published (ADR-0036)\nCarries: Order ID, Assignment ID,\nRider ID, Failure Reason Code, Timestamp"| orderFailedState["Order consumes DeliveryFailed ->\nOrder state: Failed Delivery\n(SRD 10.1)"]
+
+    failed --> customerUnavail{"Failure reason:\nCustomer Unavailable /\nno-show? (BR-016)"}
+    customerUnavail -->|"yes"| supportFlow["SUPPORT WORKFLOW:\nCustomer no-show creates a\nfailed-delivery record +\nsupport follow-up (BR-016)\nSupport consumes DeliveryFailed"]
+    customerUnavail -->|"no - other failure reason"| supportFlow
+
+    supportFlow --> supportTicket["Support: OpenTicket\n(order-scoped, delivery context)\nSupportTicketOpened published"]
+    supportTicket --> supportResolution{"Support resolution path\n(SRD 10.7 Support Ticket\nState Machine)"}
+    supportResolution -->|"reassign / redeliver"| assigned
+    supportResolution -->|"refund warranted"| refundPath(["Order determines refund eligibility;\nPayment issues refund -\nsee payment-flow.mmd"])
+    supportResolution -->|"return to store"| returnedState["Order state: Returned\n(SRD 10.1)"]
+
+    orderFailedState --> failed2Options{"Order's next state\n(SRD 10.1 Failed Delivery\nallowed next states)"}
+    failed2Options --> returnedState
+    failed2Options --> refundPath
+    failed2Options --> cancelledState["Order state: Cancelled"]
+
+    classDef dispatch fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef assign fill:#eaf2e4,stroke:#5a8f3c,color:#1a1a1a
+    classDef progress fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+    classDef success fill:#e7f5ea,stroke:#3f8f52,color:#1a1a1a
+    classDef failure fill:#fde6e0,stroke:#c0533c,color:#1a1a1a
+    classDef support fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+
+    class trigger,created,batchEval,singleAssign,batchAssign dispatch
+    class assigned,accepted,rejected,expired assign
+    class pickedUp,outForDelivery progress
+    class delivered,paymentCheck,completedWithPayment,completedOnly,orderCompleted success
+    class failed,orderFailedState,customerUnavail,failed2Options,cancelledState failure
+    class supportFlow,supportTicket,supportResolution,refundPath,returnedState support

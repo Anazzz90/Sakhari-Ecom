@@ -1,0 +1,84 @@
+%% Illustrates: DDD Section 5.40 (Delivery Batch), 5.41 (Delivery Stop), 5.22 (Delivery Assignment, extended);
+%% SRD Section 10.5.1 (Delivery Batching Lifecycle), FR-BATCH-001/008/010, BR-017, BR-020, BR-021; ADR-0034
+%% Last verified against source: 2026-07-30
+%% Business Flow - Delivery Batch Diagram
+
+flowchart TD
+    subgraph ENTITIES["Entity relationships (DDD 5.40-5.41) - Delivery-owned, no other module aware a batch exists"]
+        direction TB
+        driver["Driver (Rider)\nholds AT MOST ONE\nactive batch at a time (BR-017)"]
+        batch["Delivery Batch\nstore-scoped, rider-scoped\nmax 2 active assignments (MVP, FR-BATCH-001)\nstatus, created/assigned/completed timestamps"]
+        stop1["Delivery Stop #1\nsequence number only\nNO status of its own"]
+        stop2["Delivery Stop #2\nsequence number only\nNO status of its own"]
+        assign1["Delivery Assignment A\n(batch_id + sequence_in_batch,\nboth nullable - DDD 5.22)\nfull state machine unchanged (SRD 10.5)"]
+        assign2["Delivery Assignment B\n(batch_id + sequence_in_batch,\nboth nullable)\nfull state machine unchanged"]
+        order1(["Order 1"])
+        order2(["Order 2"])
+
+        driver -->|"assigned to (once accepted)"| batch
+        batch -->|"has ordered list of"| stop1
+        batch -->|"has ordered list of"| stop2
+        stop1 -->|"points to exactly one\n(assignment appears in at\nmost one stop - DDD 5.41)"| assign1
+        stop2 -->|"points to exactly one"| assign2
+        assign1 -.->|"indirectly, through the\nassignment only - batch\nNEVER references Order directly"| order1
+        assign2 -.->|"indirectly only"| order2
+    end
+
+    subgraph LIFECYCLE["Batch lifecycle (SRD 10.5.1) - runs in parallel with, never gates, each assignment's own state machine"]
+        direction LR
+        forming["Forming\nDispatch evaluation as\norders become packed\n(scheduled sweep, DDD 15.8)"]
+        createdB["Created\nEligible orders grouped;\nstop sequence assigned\nDeliveryBatchCreated published"]
+        assignedB["Assigned\nRider offered and\naccepted whole batch\nDriverAssignedToBatch published"]
+        inProgress["In Progress\nRider completing\nstops in sequence\n(first stop pickup/departure)"]
+        completedB["Completed\nEvery stop reached a terminal\nstate (Delivered or\nCancelled/Failed at assignment level)\nBatchCompleted published"]
+        cancelledB["Cancelled\nRider rejected whole batch,\nor all stops cancelled\nbefore assignment\nBatchCancelled published"]
+
+        forming --> createdB
+        createdB --> assignedB
+        assignedB --> inProgress
+        inProgress --> completedB
+        assignedB -->|"rider rejects\nwhole batch"| cancelledB
+        createdB -->|"all stops cancelled\nbefore assignment"| cancelledB
+    end
+
+    ENTITIES -.-> LIFECYCLE
+
+    subgraph ELIGIBILITY["Batch formation eligibility (Settings-owned thresholds, ADR-0034)"]
+        direction TB
+        elig1["Same originating store\n(invariant, not configurable - BR-021)"]
+        elig2["Delivery locations within\nconfigurable distance/travel-time"]
+        elig3["Order readiness times within\nconfigurable tolerance window"]
+        elig4["Rider capacity not exceeded\n(MVP max 2, FR-BATCH-001)"]
+        elig5["Estimated SLA maintained\nfor EVERY order in batch\n(10-20 min promise never traded away)"]
+    end
+    ELIGIBILITY --> forming
+
+    subgraph PARTIAL["Partial cancellation (ADR-0034) - one order's fate never affects the other's"]
+        direction TB
+        oneCancel["Order 1 cancelled\n(customer/support/payment failure)"]
+        oneCancel --> assignCancel["Delivery Assignment A -> Cancelled\n(its own existing, unchanged\nstate machine, SRD 10.5)"]
+        assignCancel --> batchUpdate["Batch updates to reflect\nONE FEWER active stop\n(exactly like removing one item\nfrom any list - other stop unaffected)"]
+        batchUpdate --> stop2Continue["Delivery Stop #2 / Assignment B\ncontinues normally toward\nPicked Up -> Delivered"]
+        batchUpdate -.->|"if that was the batch's\nONLY remaining active stop"| cancelledB
+    end
+
+    subgraph ROUTE["Route optimisation (FR-BATCH-010)"]
+        direction TB
+        recalcTrigger["Route recalculation triggered\n(e.g., traffic, new stop conditions)"]
+        recalcTrigger --> reseq["RecalculateBatchRoute:\nsequence numbers REORDERED\n(unique, contiguous - DDD 5.41)"]
+        reseq --> sameAssign["Which assignment each stop\npoints to NEVER changes -\nonly the ORDER of stops\nBatchRouteUpdated published"]
+        reseq -.->|"manual re-sequencing"| auditNote["Audited as part of batch's\nown audit trail (DDD 5.40)"]
+    end
+    inProgress -.-> recalcTrigger
+
+    classDef entity fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef lifecycle fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef eligibility fill:#eaf2e4,stroke:#5a8f3c,color:#1a1a1a
+    classDef partial fill:#fde6e0,stroke:#c0533c,color:#1a1a1a
+    classDef route fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+
+    class driver,batch,stop1,stop2,assign1,assign2,order1,order2 entity
+    class forming,createdB,assignedB,inProgress,completedB,cancelledB lifecycle
+    class elig1,elig2,elig3,elig4,elig5 eligibility
+    class oneCancel,assignCancel,batchUpdate,stop2Continue partial
+    class recalcTrigger,reseq,sameAssign,auditNote route
