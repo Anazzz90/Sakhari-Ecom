@@ -1,0 +1,79 @@
+%% Illustrates: 03-decomposition/capability-boundary-map.md (Section 4)
+%% Last verified against source: 2026-07-30
+%% Business Capability Map (non-C4; business-domain grouping is this diagram's own
+%% organizing device, not a boundary asserted by the source document)
+
+flowchart TB
+    subgraph G1["Identity & Profile"]
+        Auth["Auth\nCapability: Identity & Session Authentication\nOwns: OTP login, sessions, step-up auth (ADR-0040)\nNeighbours: Notification, User"]
+        User["User\nCapability: Customer & Workforce Profile Mgmt\nOwns: profiles, addresses, worker capability/shift\nNeighbours: Auth, Cart, Order, Delivery, Promotion, Support"]
+    end
+
+    subgraph G2["Store, Catalog & Discovery"]
+        Store["Store\nCapability: Store & Service Area Management\nOwns: dark stores, service zones\nNeighbours: Catalog, Inventory, Order, Delivery"]
+        Catalog["Catalog\nCapability: Product Catalog Management\nOwns: product/category/brand definitions\nNeighbours: Store, Search, Inventory, Cart, Promotion"]
+        Search["Search\nCapability: Product Discovery\nOwns: derived search index only (no primary data)\nNeighbours: Catalog, Inventory (event-driven)"]
+    end
+
+    subgraph G3["Commerce Transaction"]
+        Cart["Cart\nCapability: Shopping Cart Management\nOwns: pre-checkout selection (draft)\nNeighbours: Catalog, User, Order"]
+        Inventory["Inventory\nCapability: Inventory & Stock Management\nOwns: stock levels, reservations, ledger\nNeighbours: Store, Catalog, Order, Search"]
+        Promotion["Promotion\nCapability: Promotions & Discount Management\nOwns: promo rules, eligibility, usage\nNeighbours: Catalog, User, Order"]
+        Order["Order\nCapability: Order Mgmt & Checkout Orchestration\nOwns: order record, price snapshot\nNeighbours: Cart, Inventory, Payment, Promotion, User, Store, Delivery, Support"]
+        Payment["Payment\nCapability: Payment Settlement & Refunds\nOwns: payment, refund, ledger (ADR-0037)\nNeighbours: Order, Support"]
+    end
+
+    subgraph G4["Fulfillment"]
+        Delivery["Delivery\nCapability: Fulfillment (Picking & Delivery)\nOwns: picking, rider assignment, batching (ADR-0034)\nNeighbours: Order, User, Store, Support"]
+    end
+
+    subgraph G5["Support & Communication"]
+        Notification["Notification\nCapability: Customer & Worker Communication\nOwns: SMS/push dispatch, delivery status\nNeighbours: (event-driven from nearly every capability)"]
+        Support["Support\nCapability: Customer & Operational Support\nOwns: tickets, ticket comments\nNeighbours: User, Order, Payment, Delivery"]
+    end
+
+    subgraph G6["Platform & Governance"]
+        Analytics["Analytics\nCapability: Reporting & Business Analytics\nOwns: rebuildable rollups/snapshots\nNeighbours: (event-driven, no callers)"]
+        Audit["Audit\nCapability: Compliance & Audit Trail\nOwns: immutable audit log\nNeighbours: (called by nearly every capability, calls none)"]
+        Settings["Settings\nCapability: Platform Configuration Management\nOwns: global/store-scoped config\nNeighbours: read by Auth, Notification, Order, Payment,\nDelivery, Inventory, Promotion, Store, Analytics"]
+    end
+
+    Auth -->|dispatch OTP| Notification
+    User -->|resolve identity| Auth
+    Catalog -->|scope visibility| Store
+    Search -.->|consumed events, never sync| Catalog
+    Search -.->|consumed events, optional| Inventory
+    Inventory -->|scope stock| Store
+    Inventory -->|validate product| Catalog
+    Cart -->|scope to customer| User
+    Cart -->|validate items| Catalog
+    Order -->|read selection| Cart
+    Order -->|reserve stock, sync| Inventory
+    Order -->|initiate payment, sync| Payment
+    Order -->|evaluate eligibility| Promotion
+    Order -->|resolve customer/address| User
+    Order -->|resolve serving store| Store
+    Payment -->|order/amount context| Order
+    Promotion -->|customer eligibility| User
+    Promotion -->|product/category rules| Catalog
+    Delivery -->|fulfillment-ready signal & completion| Order
+    Delivery -->|eligible pickers/riders| User
+    Delivery -->|scope to store| Store
+    Support -->|refund via Payment interface| Payment
+    Support -->|ticket context| Order
+    Support -->|ticket context| Delivery
+    Support -->|profile context| User
+
+    classDef identity fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef catalog fill:#eaf2e4,stroke:#5a8f3c,color:#1a1a1a
+    classDef commerce fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+    classDef fulfillment fill:#fde6e0,stroke:#c0533c,color:#1a1a1a
+    classDef support fill:#e0f3f3,stroke:#2f8f8f,color:#1a1a1a
+    classDef platform fill:#ececec,stroke:#666666,color:#1a1a1a
+
+    class Auth,User identity
+    class Store,Catalog,Search catalog
+    class Cart,Inventory,Promotion,Order,Payment commerce
+    class Delivery fulfillment
+    class Notification,Support support
+    class Analytics,Audit,Settings platform

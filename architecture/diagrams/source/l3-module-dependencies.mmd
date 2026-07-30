@@ -1,0 +1,103 @@
+%% Illustrates: 03-decomposition/module-catalog.md (Section 4), module-communication.md (Sections 7, 9, 12)
+%% Last verified against source: 2026-07-30
+%% C4 Level 3 (system-wide component view) - Module Dependency Diagram
+%% Edges below are the closed-world ALLOWED set from module-communication.md Section 12 (A cells only).
+%% Everything not drawn as an edge is FORBIDDEN or NOT-SANCTIONED by default (ADR-0009 closed-world rule) -
+%% see rendering notes for the handful of illustrative forbidden edges included.
+
+flowchart LR
+    subgraph L1["Foundation layer (depends on nothing, except Auth->Notification exception)"]
+        Auth["Auth\nRequestOtp, VerifyOtp,\nIssueTokenPair, ValidateToken"]
+        User["User\nGetCustomerProfile,\nGetWorkerCapabilities"]
+        Store["Store\nGetStore, ResolveServingStoreForAddress"]
+        Settings["Settings\nGetSetting, ListSettingsForScope"]
+    end
+
+    subgraph L2["Reference layer"]
+        Catalog["Catalog\nGetProduct, ListProductsByCategory"]
+        Search["Search\nSearchProducts, SuggestSearchTerms"]
+    end
+
+    subgraph L3["Commerce layer"]
+        Cart["Cart\nGetCart, AddCartItem"]
+        Inventory["Inventory\nGetAvailability, ReserveStock"]
+        Promotion["Promotion\nEvaluatePromotionEligibility, ApplyPromoCode"]
+    end
+
+    subgraph L4["Transaction orchestration layer"]
+        Order["Order\nPlaceOrder, CancelOrder\n(system's primary orchestrator)"]
+        Payment["Payment\nInitiatePayment, IssueRefund"]
+    end
+
+    subgraph L5["Fulfillment layer"]
+        Delivery["Delivery\nAssignRider, CompleteDelivery,\nCreateDeliveryBatch (ADR-0034)"]
+    end
+
+    subgraph L6["Operations/support layer"]
+        Support["Support\nOpenTicket, AssignTicket"]
+    end
+
+    subgraph L7["Consumer tier (nothing depends on these synchronously)"]
+        Notification["Notification\nSendNotification"]
+        Analytics["Analytics\nGetReportRollup, TriggerRollupGeneration"]
+        Audit["Audit\nRecordAuditEntry"]
+    end
+
+    %% Allowed dependencies (module-communication.md Section 12, "A" cells)
+    Auth -->|allowed: OTP dispatch, named sync exception| Notification
+    Auth -->|allowed: OTP abuse thresholds, ADR-0039| Settings
+    User -->|allowed: resolve identity| Auth
+    Store -->|allowed| Settings
+    Catalog -->|allowed: scope visibility| Store
+    Search -->|allowed: event-driven, not sync| Catalog
+    Search -->|allowed: event-driven, optional| Inventory
+    Inventory -->|allowed: scope stock| Store
+    Inventory -->|allowed: validate product| Catalog
+    Inventory -->|allowed| Settings
+    Cart -->|allowed: scope to customer| User
+    Cart -->|allowed: validate item| Catalog
+    Order -->|allowed: resolve customer| User
+    Order -->|allowed: resolve store| Store
+    Order -->|allowed: reserve stock, sync| Inventory
+    Order -->|allowed: read selection| Cart
+    Order -->|allowed: initiate payment, sync| Payment
+    Order -->|allowed: eligibility/discount| Promotion
+    Order -->|allowed| Settings
+    Payment -->|allowed: only caller context| Order
+    Payment -->|allowed| Settings
+    Promotion -->|allowed: eligibility| User
+    Promotion -->|allowed: rule scope| Catalog
+    Promotion -->|allowed| Settings
+    Delivery -->|allowed: eligible pickers/riders| User
+    Delivery -->|allowed: scope| Store
+    Delivery -->|allowed: fulfillment-ready signal| Order
+    Delivery -->|allowed: batching thresholds ADR-0034| Settings
+    Notification -->|allowed| Settings
+    Support -->|allowed: profile context| User
+    Support -->|allowed: order context| Order
+    Support -->|allowed: refund via IssueRefund| Payment
+    Support -->|allowed: delivery context| Delivery
+    Analytics -->|allowed| Settings
+
+    %% Illustrative FORBIDDEN dependencies (NOT exhaustive - full table is module-communication.md Section 12)
+    Order -.->|FORBIDDEN example| Delivery
+    Delivery -.->|FORBIDDEN example, ADR-0035 note| Payment
+    Catalog -.->|FORBIDDEN example| Cart
+    Audit -.->|FORBIDDEN: Audit calls nothing| Auth
+    Settings -.->|FORBIDDEN: Settings calls nothing| Store
+
+    classDef foundation fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef reference fill:#eaf2e4,stroke:#5a8f3c,color:#1a1a1a
+    classDef commerce fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+    classDef txn fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef fulfillment fill:#fde6e0,stroke:#c0533c,color:#1a1a1a
+    classDef ops fill:#e0f3f3,stroke:#2f8f8f,color:#1a1a1a
+    classDef consumer fill:#ececec,stroke:#666666,color:#1a1a1a
+
+    class Auth,User,Store,Settings foundation
+    class Catalog,Search reference
+    class Cart,Inventory,Promotion commerce
+    class Order,Payment txn
+    class Delivery fulfillment
+    class Support ops
+    class Notification,Analytics,Audit consumer

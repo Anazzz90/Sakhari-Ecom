@@ -1,0 +1,72 @@
+%% Illustrates: 03-decomposition/module-communication.md (Sections 2, 4-8, 10), decisions/0029 (transactional outbox)
+%% Last verified against source: 2026-07-30
+%% Module Communication Diagram - sync calls, async events via the transactional outbox
+%% Scope note: only the sync calls narrated explicitly in module-communication.md Section 10's
+%% worked examples are drawn as direct solid edges. Every other allowed synchronous read/context
+%% dependency (e.g. the nine modules reading Settings, Cart reading Catalog) is already fully
+%% enumerated in l3-module-dependencies.mmd and is not repeated here to keep this diagram legible -
+%% see rendering notes.
+
+flowchart TB
+    subgraph SYNC["Synchronous public-interface calls (in-process, no network hop - ADR-0002)"]
+        direction TB
+        Cart["Cart\nPublic: GetCart"]
+        Inventory["Inventory\nPublic: ReserveStock"]
+        Order["Order\nPublic: PlaceOrder, CancelOrder\n(checkout orchestrator)"]
+        Payment["Payment\nPublic: InitiatePayment, IssueRefund"]
+        Promotion["Promotion\nPublic: EvaluatePromotionEligibility"]
+        Auth["Auth\nPublic: RequestOtp, VerifyOtp"]
+        NotificationSync["Notification\nPublic: SendNotification"]
+        Support["Support\nPublic: OpenTicket"]
+        Delivery["Delivery\nPublic: CompleteDelivery"]
+    end
+
+    Order -->|"1. sync: GetCart"| Cart
+    Order -->|"2. sync: ReserveStock\n(own txn, ADR-0021)"| Inventory
+    Order -->|"3. sync: InitiatePayment\n(own txn, ADR-0021)"| Payment
+    Order -->|"sync: EvaluatePromotionEligibility"| Promotion
+    Auth -->|"sync: SendNotification\n(the ONE named exception,\nneeds dispatch confirmation)"| NotificationSync
+    Support -->|"sync: IssueRefund\n(admin action, still via public interface)"| Payment
+
+    subgraph OUTBOX["Transactional Outbox (ADR-0029) - PostgreSQL-backed, durable"]
+        direction TB
+        OutboxStore[("Outbox table\nwritten in the SAME module-local\ntransaction as the entity change")]
+        Dispatcher["Background dispatcher\nreads pending rows, invokes consumers,\nretries with backoff, marks processed"]
+        OutboxStore --> Dispatcher
+    end
+
+    Auth -.->|"publishes: UserAuthenticated,\nOtpRequested, SessionRevoked,\nStepUp* (ADR-0040)"| OutboxStore
+    UserMod["User"] -.->|"publishes: CustomerProfileUpdated,\nAddressAdded, WorkerAvailabilityChanged"| OutboxStore
+    StoreMod["Store"] -.->|"publishes: StoreActivated,\nStoreDeactivated, ServiceZoneChanged"| OutboxStore
+    CatalogMod["Catalog"] -.->|"publishes: ProductCreated,\nProductUpdated, ProductDeactivated,\nCategoryChanged"| OutboxStore
+    InventoryMod["Inventory"] -.->|"publishes: InventoryReserved,\nInventoryReservationFailed,\nInventoryLevelChanged, InventoryLedgerRecorded"| OutboxStore
+    CartMod["Cart"] -.->|"publishes: CartUpdated (optional)"| OutboxStore
+    OrderMod["Order"] -.->|"publishes: OrderPlaced, OrderCancelled,\nOrderStatusChanged, OrderReadyForFulfillment"| OutboxStore
+    PaymentMod["Payment"] -.->|"publishes: PaymentAuthorized, PaymentCaptured,\nPaymentFailed, RefundIssued, RefundFailed,\nCashRemittanceRecorded, PaymentLedgerRecorded (ADR-0037)"| OutboxStore
+    PromotionMod["Promotion"] -.->|"publishes: PromotionUsageRecorded"| OutboxStore
+    DeliveryMod["Delivery"] -.->|"publishes: PickingCompleted, DeliveryAssigned,\nDeliveryCompleted, DeliveryFailed, DeliveryRejected (ADR-0036),\nDeliveryCompletedWithPayment (ADR-0035),\nBatch* events (ADR-0034)"| OutboxStore
+    NotificationMod["Notification"] -.->|"publishes: NotificationSent,\nNotificationFailed, NotificationDeliveryConfirmed"| OutboxStore
+    SupportMod["Support"] -.->|"publishes: SupportTicket* (6 events)"| OutboxStore
+    SettingsMod["Settings"] -.->|"publishes: SettingChanged"| OutboxStore
+
+    Dispatcher -.->|"consumes: UserAuthenticated"| UserConsumer["User"]
+    Dispatcher -.->|"consumes: ProductCreated/Updated/Deactivated,\nInventoryLevelChanged (optional)"| SearchConsumer["Search"]
+    Dispatcher -.->|"consumes: ProductDeactivated"| CartConsumer["Cart"]
+    Dispatcher -.->|"consumes: PaymentAuthorized/Failed/Captured,\nInventoryReservationFailed, PickingCompleted,\nDeliveryCompleted, DeliveryFailed,\nDeliveryCompletedWithPayment"| OrderConsumer["Order"]
+    Dispatcher -.->|"consumes: OrderPlaced (informational)"| PaymentConsumer["Payment"]
+    Dispatcher -.->|"consumes: OrderCancelled"| PromotionConsumer["Promotion"]
+    Dispatcher -.->|"consumes: OrderReadyForFulfillment"| DeliveryConsumer["Delivery"]
+    Dispatcher -.->|"consumes: OtpRequested, OrderPlaced,\nOrderStatusChanged, PaymentAuthorized/Failed,\nDeliveryAssigned, DeliveryCompleted"| NotificationConsumer["Notification"]
+    Dispatcher -.->|"consumes: OrderCancelled, PaymentFailed,\nRefundIssued, DeliveryCompleted/Failed"| SupportConsumer["Support"]
+    Dispatcher -.->|"consumes: broad reporting subset\n(OrderPlaced, PaymentCaptured, RefundIssued, ...)"| AnalyticsConsumer["Analytics"]
+    Dispatcher -.->|"consumes: every consequential action\n(direct RecordAuditEntry call OR consumed event -\nmechanism left to integration-and-messaging.md)"| AuditConsumer["Audit"]
+
+    classDef sync fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef outbox fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+    classDef pub fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef con fill:#eaf2e4,stroke:#5a8f3c,color:#1a1a1a
+
+    class Cart,Inventory,Order,Payment,Promotion,Auth,NotificationSync,Support,Delivery sync
+    class OutboxStore,Dispatcher outbox
+    class UserMod,StoreMod,CatalogMod,InventoryMod,CartMod,OrderMod,PaymentMod,PromotionMod,DeliveryMod,NotificationMod,SupportMod,SettingsMod pub
+    class UserConsumer,SearchConsumer,CartConsumer,OrderConsumer,PaymentConsumer,PromotionConsumer,DeliveryConsumer,NotificationConsumer,SupportConsumer,AnalyticsConsumer,AuditConsumer con

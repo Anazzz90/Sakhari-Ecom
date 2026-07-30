@@ -1,0 +1,75 @@
+%% Illustrates: 02-context/system-context.md (Sections 1-8, Diagram-Ready Model)
+%% Last verified against source: 2026-07-30
+%% C4 Level 1 - System Context
+
+flowchart TB
+    actorCustomer["Customer"]
+    actorPicker["Picker"]
+    actorRider["Rider"]
+    actorAdminOps["Admin / Ops / Support\n(single actor category, RBAC-differentiated)"]
+
+    subgraph SYS["Sakhari Ecom Platform (system boundary)"]
+        direction TB
+
+        subgraph CP["Customer Platform"]
+            direction LR
+            custWeb["Customer Web App\n(Customer Website)"]
+            custMobile["Customer Mobile App"]
+        end
+
+        subgraph OP["Operations Platform"]
+            direction LR
+            workerApp["Worker App\n(Picker + Rider modes)\n(Worker Mobile App)"]
+            adminDash["Admin/Ops Dashboard\nRBAC roles: Admin, Ops, Support\n(single app - see rendering notes)"]
+        end
+
+        backend["Backend\n(single modular-monolith service,\n16 capability modules)"]
+
+        subgraph INFRA["Infrastructure"]
+            direction LR
+            pg[("PostgreSQL\n(system of record)")]
+            redis[("Redis\n(cache/coordination only)")]
+            objStore[("Object Storage\n(media/file assets)")]
+        end
+    end
+
+    extPayment(["Moyasar Payment Gateway"])
+    extSms(["Unifonic SMS/OTP Provider"])
+    extPush(["Push Notification Provider"])
+    extMaps(["Google Maps / Geocoding Provider"])
+    extCloud(["AWS me-central-2 Cloud Infrastructure"])
+
+    actorCustomer -->|"e1: human interaction"| CP
+    actorPicker -->|"e2: human interaction"| OP
+    actorRider -->|"e3: human interaction"| OP
+    actorAdminOps -->|"e4: human interaction"| OP
+
+    CP -->|"e5: sync, versioned REST API\nauthenticated + authorized"| backend
+    OP -->|"e6: sync, versioned REST API\nauthenticated + RBAC-authorized"| backend
+
+    backend -->|"e7: sync API call\n(authorize/capture)"| extPayment
+    backend -->|"e8: sync send + inbound callback\n(status validated)"| extSms
+    backend -->|"e13: sync API call (send)"| extPush
+    backend -->|"e16: sync API call\n(address validation/geocoding)\nDEFAULT: backend-mediated"| extMaps
+
+    extPush -.->|"e14: inbound push delivery (confirmed)\ndisplay trigger only, never authoritative"| custMobile
+    extPush -.->|"e15: inbound push delivery (UNCONFIRMED)\nsee rendering notes"| workerApp
+
+    custWeb -.->|"ADR-0033: client SDK, autocomplete ONLY\nnever authoritative validation"| extMaps
+    custMobile -.->|"ADR-0033: client SDK, autocomplete ONLY\nnever authoritative validation"| extMaps
+
+    backend -->|"e9: transactional read/write, module-scoped"| pg
+    backend -->|"e10: cache/session/rate-limit/coordination"| redis
+    backend -->|"e11: upload/retrieve media, ref stored in PostgreSQL"| objStore
+
+    INFRA -.->|"e12: managed hosting dependency\n(deployment-level only)"| extCloud
+
+    classDef actor fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef ext fill:#f7ecdc,stroke:#b5822a,color:#1a1a1a
+    classDef infra fill:#e7f5ea,stroke:#3f8f52,color:#1a1a1a
+    classDef backend fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+
+    class actorCustomer,actorPicker,actorRider,actorAdminOps actor
+    class extPayment,extSms,extPush,extMaps,extCloud ext
+    class pg,redis,objStore infra
+    class backend backend

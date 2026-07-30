@@ -1,0 +1,60 @@
+%% Illustrates: 02-context/system-context.md (Section 8), 03-decomposition/service-decomposition.md
+%% Last verified against source: 2026-07-30
+%% C4 Level 2 - Container Diagram
+
+flowchart TB
+    subgraph TB1["TRUST BOUNDARY 1: Untrusted clients (self-reported identity never trusted)"]
+        direction LR
+        custWeb["Customer Web App\n[Container: Next.js]\nADR-0007"]
+        custMobile["Customer Mobile App\n[Container: React Native]\nADR-0006"]
+        workerApp["Worker App\n[Container: React Native]\nPicker + Rider modes, ADR-0006"]
+        adminDash["Admin/Ops Dashboard\n[Container: React Web]\nADR-0008, RBAC-scoped: Admin/Ops/Support"]
+    end
+
+    subgraph TB2["TRUST BOUNDARY 2: Backend - first fully trusted zone"]
+        backend["Backend\n[Container: NestJS modular monolith]\nADR-0002, ADR-0025\nAuthenticates + authorizes every request"]
+    end
+
+    subgraph TB3["TRUST BOUNDARY 3: Infrastructure - reachable only from Backend"]
+        direction LR
+        pg[("PostgreSQL\n[Container: Data Store]\nSystem of record, ADR-0003")]
+        redis[("Redis\n[Container: Data Store]\nCache/session/rate-limit/coordination\nADR-0004 - never authoritative")]
+        objStore[("Object Storage\n[Container: Data Store]\nMedia/file assets, ADR-0016")]
+    end
+
+    subgraph TB4["TRUST BOUNDARY 4: External providers - reached only by Backend"]
+        direction LR
+        extPayment(["Moyasar Payment Gateway\nADR-0022"])
+        extSms(["Unifonic SMS/OTP Provider\nADR-0023"])
+        extPush(["Push Notification Provider"])
+        extMaps(["Google Maps / Geocoding Provider"])
+    end
+
+    custWeb -->|"HTTPS/REST, versioned API\nADR-0017, JWT-authenticated\nADR-0026"| backend
+    custMobile -->|"HTTPS/REST, versioned API\nJWT-authenticated"| backend
+    workerApp -->|"HTTPS/REST, versioned API\nJWT-authenticated"| backend
+    adminDash -->|"HTTPS/REST, versioned API\nJWT-authenticated + RBAC"| backend
+
+    backend -->|"SQL, transactional\nmodule-scoped writes only\nADR-0009"| pg
+    backend -->|"Redis protocol\ncache/session/rate-limit/locks"| redis
+    backend -->|"Object storage API\nupload/retrieve; PostgreSQL holds ref only"| objStore
+
+    backend -->|"HTTPS/REST, sync\nauthorize + capture, ADR-0032 retry/circuit-breaker"| extPayment
+    backend -->|"HTTPS/REST, sync send +\ninbound webhook callback (validated)"| extSms
+    backend -->|"HTTPS/REST, sync send"| extPush
+    backend -->|"HTTPS/REST, sync\naddress validation + geocoding"| extMaps
+
+    extPush -.->|"inbound push (display trigger only)"| custMobile
+    extPush -.->|"inbound push (UNCONFIRMED)"| workerApp
+    custWeb -.->|"client SDK, autocomplete ONLY\nADR-0033"| extMaps
+    custMobile -.->|"client SDK, autocomplete ONLY\nADR-0033"| extMaps
+
+    classDef client fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef backend fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef infra fill:#e7f5ea,stroke:#3f8f52,color:#1a1a1a
+    classDef ext fill:#f7ecdc,stroke:#b5822a,color:#1a1a1a
+
+    class custWeb,custMobile,workerApp,adminDash client
+    class backend backend
+    class pg,redis,objStore infra
+    class extPayment,extSms,extPush,extMaps ext
