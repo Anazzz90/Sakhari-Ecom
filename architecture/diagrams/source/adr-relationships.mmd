@@ -1,0 +1,157 @@
+%% Illustrates: decisions/README.md (full ADR index, lifecycle, narrative groupings)
+%% Last verified against source: 2026-07-30
+%% Documentation & Governance - ADR Relationship Diagram
+%% NOTE: "Related ADR" edges shown are drawn only where this session verified the source
+%% ADR's own "Related ADRs" footer (0010, 0029, 0030, 0034, 0035, 0036, 0037, 0038).
+%% Every other ADR's full pairwise relationships are its own file's "Related" section -
+%% not reproduced edge-by-edge here to avoid asserting an unverified relationship.
+%% Area clusters below ARE grounded in decisions/README.md's own narrative index text.
+
+flowchart TB
+    subgraph META["Meta"]
+        a1["0001\nRecord architecture decisions"]
+    end
+
+    subgraph BACKFILL["Foundation backfill (0002-0009, 0017) - decisions/README.md:\n'ADRs 0002-0017 backfill decisions already implicit\nin the finalized SRD and the ADS'"]
+        direction LR
+        a2["0002\nModular monolith"]
+        a3["0003\nPostgreSQL SoT"]
+        a4["0004\nRedis cache/coord only"]
+        a5["0005\nTypeScript stack"]
+        a6["0006\nReact Native (Customer+Worker)"]
+        a7["0007\nNext.js (Customer Web)"]
+        a8["0008\nReact Admin Dashboard"]
+        a9["0009\nModule ownership, no cross-repo access"]
+        a17["0017\nVersioned APIs from day one"]
+    end
+
+    subgraph DATACONV["Data conventions (0013-0016, 0018-0019)"]
+        direction LR
+        a13["0013\nULIDs\n(SUPERSEDED)"]
+        a18["0018\nUUID primary keys\n(SUPERSEDED)"]
+        a19["0019\nRestore ULID PKs\n(current, effective)"]
+        a14["0014\nUTC timestamp storage"]
+        a15["0015\nInteger halala money"]
+        a16["0016\nObject storage (S3)"]
+    end
+
+    subgraph EVENTSTXN["Events & Transactions (0010-0011, 0021, 0029)"]
+        direction LR
+        a10["0010\nTransactional checkout +\ninventory reservation\n(historical)"]
+        a21["0021\nCheckout txn boundary\nclarification (OPERATIVE)"]
+        a11["0011\nEvent-driven async side effects"]
+        a29["0029\nPostgreSQL transactional outbox"]
+    end
+
+    subgraph SECURITY["Security (0012, 0026-0027, 0039-0041)"]
+        direction LR
+        a12["0012\nRBAC, fine-grained permissions"]
+        a26["0026\nJWT + rotating refresh tokens"]
+        a27["0027\nOTP-first authentication"]
+        a39["0039\nOTP abuse protection defaults"]
+        a40["0040\nStep-up auth, privileged roles"]
+        a41["0041\nStore-scoped RBAC"]
+    end
+
+    subgraph RECONCILE["Reconciliation & finalization (0020-0028) - decisions/README.md:\n'close the major open architecture gaps found before SDD work'"]
+        direction LR
+        a20["0020\nModule ownership reconciliation\n(+ Support module)"]
+        a22["0022\nMoyasar payment gateway"]
+        a23["0023\nUnifonic SMS/OTP"]
+        a24["0024\nAWS me-central-2 region"]
+        a25["0025\nNestJS backend framework"]
+        a28["0028\nCDN for public content"]
+    end
+
+    subgraph ARR1["ARR-1 remediation (0029-0033) - decisions/README.md:\n'close the ARR readiness blockers'"]
+        direction LR
+        a30["0030\nProduction deployment topology"]
+        a31["0031\nProduction readiness targets"]
+        a32["0032\nExternal integration resilience"]
+        a33["0033\nSecurity & business-rule closure"]
+    end
+
+    subgraph DELIVERY["Delivery (0034-0036)"]
+        direction LR
+        a34["0034\nDelivery batching\n(multi-order)"]
+        a35["0035\nDelivery-collected\npayment event"]
+        a36["0036\nDelivery failed/\nrejected events"]
+    end
+
+    subgraph PAYMENTAREA["Payment (0037-0038)"]
+        direction LR
+        a37["0037\nPayment ledger"]
+        a38["0038\nLine-item partial refunds"]
+    end
+
+    %% Supersession / clarification chains - EXPLICIT in decisions/README.md
+    a13 ==>|SUPERSEDED BY| a18
+    a18 ==>|SUPERSEDED BY| a19
+    a10 -.->|CLARIFIED BY| a21
+
+    %% Verified "Related ADRs" edges (from each ADR's own Related section)
+    a10 --> a3
+    a10 --> a4
+    a10 --> a11
+    a29 --> a3
+    a29 --> a4
+    a29 --> a11
+    a30 --> a2
+    a30 --> a3
+    a30 --> a4
+    a30 --> a16
+    a30 --> a24
+    a30 --> a28
+    a30 --> a29
+    a34 --> a2
+    a34 --> a9
+    a34 --> a11
+    a34 --> a17
+    a34 --> a20
+    a34 --> a21
+    a34 --> a29
+    a34 --> a33
+    a35 --> a9
+    a35 --> a11
+    a35 --> a20
+    a35 --> a21
+    a35 --> a29
+    a35 --> a33
+    a36 --> a9
+    a36 --> a11
+    a36 --> a20
+    a36 --> a21
+    a37 --> a9
+    a37 --> a14
+    a37 --> a15
+    a37 --> a20
+    a37 --> a22
+    a37 --> a29
+    a37 --> a32
+    a38 --> a15
+    a38 --> a20
+    a38 --> a21
+    a38 --> a33
+    a38 --> a37
+
+    classDef meta fill:#ececec,stroke:#666666,color:#1a1a1a
+    classDef backfill fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef dataconv fill:#eaf2e4,stroke:#5a8f3c,color:#1a1a1a
+    classDef eventstxn fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+    classDef security fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef reconcile fill:#e0f3f3,stroke:#2f8f8f,color:#1a1a1a
+    classDef arr1 fill:#fde6e0,stroke:#c0533c,color:#1a1a1a
+    classDef delivery fill:#dff0d8,stroke:#3f8f52,color:#1a1a1a
+    classDef payment fill:#fbe8d3,stroke:#b5822a,color:#1a1a1a
+    classDef superseded stroke-dasharray: 4 2
+
+    class a1 meta
+    class a2,a3,a4,a5,a6,a7,a8,a9,a17 backfill
+    class a13,a18,a19,a14,a15,a16 dataconv
+    class a10,a21,a11,a29 eventstxn
+    class a12,a26,a27,a39,a40,a41 security
+    class a20,a22,a23,a24,a25,a28 reconcile
+    class a30,a31,a32,a33 arr1
+    class a34,a35,a36 delivery
+    class a37,a38 payment
+    class a13,a18 superseded

@@ -1,0 +1,74 @@
+%% Illustrates: architecture/README.md Sections "folder structure header diagram" and "internal hierarchy diagram",
+%% Section 3 (relationship to SRD/DDD/SDD/Implementation), Section 8 (ADR management)
+%% Last verified against source: 2026-07-30
+%% Documentation & Governance - Architecture Decision Traceability
+%% NOTE: architecture/README.md documents ADRs as REFERENCED FROM ANY layer above them
+%% ("the record of individual significant choices, referenced from anywhere above"),
+%% not as one discrete sequential stage strictly between DDD and Architecture Documents.
+%% This diagram renders the requested top-to-bottom chain but shows ADRs as a
+%% cross-cutting reference layer, consistent with the source document - see rendering notes.
+
+flowchart TB
+    bizReq(["BUSINESS REQUIREMENTS\nSaudi quick-commerce market,\nSAMA/PDPL/mada regulatory\nconstraints, 10-20 min delivery promise"])
+
+    srd["SRD (v2.6)\n'what & why'\nProduct scope, actors, functional\nrequirements, business rules,\ncompliance obligations"]
+
+    ddd["DDD (v1.0)\n'data model'\nEntities, ownership, relationships,\nretention, integrity rules,\nlogical data architecture"]
+
+    subgraph ARCHDOCS["ARCHITECTURE DOCUMENTS (/architecture) - 'system shape'"]
+        direction TB
+        constitution["00-Architecture-Principles.md\n(the Constitution - durable values,\n12 core principles)"]
+        ads["01-Architecture-Design-Specification.md\n(the ADS - master description,\nsingle source of truth)"]
+        topicDocs["02-context/ ... 06-quality-attributes/\n(topic-specific detail, each owned\nby the ADS's summary of it)"]
+        constitution --> ads --> topicDocs
+    end
+
+    subgraph ADRLAYER["ADRs (decisions/) - REFERENCED FROM ANY LAYER ABOVE,\nnot a single sequential stage (architecture/README.md Section 8)"]
+        direction TB
+        adrs["41 immutable records (0001-0041)\nEach: context, options, decision,\nconsequences - binding once Accepted"]
+    end
+
+    sdd["SDD (module-level)\n'module detail'\nNOT YET CREATED - future phase.\nOne or more per module in\nservice-decomposition.md:\nresponsibilities, schemas,\nendpoints, events, tests"]
+
+    impl["IMPLEMENTATION\n'code'\nNOT YET BEGUN - future phase.\nMust satisfy its SDD, which in\nturn must be consistent with\n/architecture"]
+
+    bizReq --> srd
+    srd --> ddd
+    ddd --> ARCHDOCS
+    ARCHDOCS --> sdd
+    sdd --> impl
+
+    srd -.->|"references / is\nreferenced by"| ADRLAYER
+    ddd -.->|"references / is\nreferenced by"| ADRLAYER
+    ARCHDOCS -.->|"references / is\nreferenced by\n(bidirectional - ADRs cited\nfrom, and cite, topic docs)"| ADRLAYER
+    sdd -.->|"must cite the\nADRs that bind it"| ADRLAYER
+
+    subgraph WORKED["WORKED TRACEABILITY EXAMPLE - one thread through every layer"]
+        direction TB
+        wReq["SRD: cash-on-delivery is a\nsignificant share of orders\n(Section 1.2)"]
+        wDdd["DDD: Order, Order Item,\nPayment/Transaction, Inventory\nentities and lifecycle (Section 9.1)"]
+        wAdr["ADR-0010 (clarified by ADR-0021):\ntransactional checkout +\ninventory reservation,\norchestration with compensation"]
+        wArch["module-catalog.md Order/Inventory\nentries, module-communication.md\nSection 10 checkout example,\ndata-architecture.md Section 7"]
+        wSdd["Future Order module SDD:\nCheckoutOrchestrationService\ndetailed design"]
+        wImpl["Future code: Order module's\ncheckout endpoint + service layer"]
+        wReq --> wDdd --> wAdr --> wArch --> wSdd --> wImpl
+    end
+
+    srd -.-> wReq
+    impl -.-> wImpl
+
+    classDef biz fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef srddoc fill:#eaf2e4,stroke:#5a8f3c,color:#1a1a1a
+    classDef dddoc fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+    classDef arch fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef adr fill:#e0f3f3,stroke:#2f8f8f,color:#1a1a1a
+    classDef future fill:#fde6e0,stroke:#c0533c,color:#1a1a1a
+    classDef worked fill:#e7f5ea,stroke:#3f8f52,color:#1a1a1a
+
+    class bizReq biz
+    class srd srddoc
+    class ddd dddoc
+    class constitution,ads,topicDocs arch
+    class adrs adr
+    class sdd,impl future
+    class wReq,wDdd,wAdr,wArch,wSdd,wImpl worked

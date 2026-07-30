@@ -1,0 +1,80 @@
+%% Illustrates: architecture/README.md Section 1 (folder structure), Section 2 (purpose of every
+%% document), Section 4 (order of authorship), Section 5 (stability classification)
+%% Last verified against source: 2026-07-30
+%% Documentation & Governance - Documentation Hierarchy
+%% NOTE: no repository-root README.md exists today - only architecture/README.md and two
+%% sub-READMEs (decisions/, diagrams/). The requested top-level "README" node is rendered
+%% as architecture/README.md, the closest existing analog, with this gap flagged explicitly
+%% (see rendering notes) rather than assuming a root README that doesn't exist.
+
+flowchart TB
+    root(["Repository root\nNO root-level README.md exists today\n(see rendering notes)"])
+
+    srd["SRD_Sakhari_Ecom_v2.6_Saudi.md\n'what & why' - product scope, actors,\nfunctional requirements, business\nrules, compliance obligations"]
+    ddd["DDD_Sakhari_Ecom_v1.0.md\n'data model' - entities, ownership,\nrelationships, retention, integrity"]
+
+    root --> srd
+    root --> ddd
+    root --> archReadme
+
+    archReadme["architecture/README.md\nIndex & system explanation -\nfunctions as this project's\nde facto top-level architecture README"]
+
+    subgraph FOUNDATION["Foundational pair (Title-Case, root of /architecture)"]
+        direction TB
+        constitution["00-Architecture-Principles.md\n(the Constitution)\nDurable values, 12 core principles"]
+        ads["01-Architecture-Design-Specification.md\n(the ADS)\nMaster description, single source\nof truth"]
+        constitution --> ads
+    end
+    archReadme --> FOUNDATION
+
+    subgraph TOPICDOCS["Topic-specific detail (02-06), each owned by\nthe ADS's summary of it"]
+        direction TB
+        context["02-context/\nsystem-context.md, glossary.md"]
+        decomp["03-decomposition/\nmodule-catalog, module-communication,\ncapability-boundary-map,\nservice-decomposition, data-ownership-map"]
+        crosscutting["04-cross-cutting/\nsecurity, data-architecture,\nintegration-and-messaging,\nobservability, reliability,\ntechnology-decisions"]
+        deployment["05-deployment/\nenvironment-strategy,\ninfrastructure-and-release"]
+        nfr["06-quality-attributes/\nnfr-matrix.md"]
+        context --> decomp --> crosscutting --> deployment --> nfr
+    end
+    ads --> TOPICDOCS
+
+    subgraph ADRDIR["decisions/ (ADRs) - referenced FROM anywhere\nabove, not strictly below topic docs"]
+        adrs["41 records (0001-0041)\nOne immutable file per\nsignificant, hard-to-reverse choice"]
+    end
+    TOPICDOCS -.->|"cites / is cited by"| ADRDIR
+    FOUNDATION -.->|"cites / is cited by"| ADRDIR
+
+    standards["07-coding-standards/\ncoding-standards.md\n(STANDARDS)\nRepo/module structure, naming,\ntesting, docs, review checklists"]
+    guidelines["08-ai-development/\nai-development-rules.md\n(GUIDELINES)\nRequired context, constraints,\nforbidden patterns, synthesizes\nevery other document"]
+    TOPICDOCS --> standards --> guidelines
+
+    diagramsDir["diagrams/\nsource/ (.mmd files) +\ngenerated-*.md companion docs"]
+    ADRDIR -.-> diagramsDir
+    TOPICDOCS -.-> diagramsDir
+
+    sdd["SDD (module-level)\nNOT YET CREATED\nOne or more per module in\nservice-decomposition.md"]
+    guidelines --> sdd
+
+    impl["Implementation (code)\nNOT YET BEGUN\nMust satisfy its SDD, which must\nbe consistent with /architecture"]
+    sdd --> impl
+
+    classDef rootStyle fill:#ececec,stroke:#666666,color:#1a1a1a
+    classDef srddoc fill:#eaf2e4,stroke:#5a8f3c,color:#1a1a1a
+    classDef dddoc fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+    classDef archreadme fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef foundation fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef topic fill:#e0f3f3,stroke:#2f8f8f,color:#1a1a1a
+    classDef adr fill:#dff0d8,stroke:#3f8f52,color:#1a1a1a
+    classDef standard fill:#fbe8d3,stroke:#b5822a,color:#1a1a1a
+    classDef future fill:#fde6e0,stroke:#c0533c,color:#1a1a1a
+
+    class root rootStyle
+    class srd srddoc
+    class ddd dddoc
+    class archReadme archreadme
+    class constitution,ads foundation
+    class context,decomp,crosscutting,deployment,nfr topic
+    class adrs adr
+    class standards,guidelines standard
+    class diagramsDir adr
+    class sdd,impl future

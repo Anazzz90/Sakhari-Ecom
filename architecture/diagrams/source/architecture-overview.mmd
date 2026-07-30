@@ -1,0 +1,83 @@
+%% Illustrates: 01-Architecture-Design-Specification.md (whole-system summary),
+%% 02-context/system-context.md, 03-decomposition/module-catalog.md,
+%% 04-cross-cutting/security-and-compliance.md, 05-deployment/infrastructure-and-release.md
+%% Last verified against source: 2026-07-30
+%% EXECUTIVE ARCHITECTURE OVERVIEW - suitable for top of architecture/README.md
+%% Single-page summary: system, module clusters, external integrations, primary event
+%% flow, data stores, security boundary, deployment boundary.
+
+flowchart TB
+    actors(["Customers - Pickers - Riders - Admin/Ops/Support"])
+
+    subgraph CLIENTS["Client Applications"]
+        direction LR
+        custApps["Customer Web + Mobile Apps"]
+        workerApp["Worker App\n(Picker + Rider)"]
+        adminApp["Admin/Ops Dashboard"]
+    end
+
+    actors --> CLIENTS
+
+    subgraph SECBOUNDARY["SECURITY BOUNDARY - every request authenticated (OTP/JWT) and\nauthorized (RBAC + store scope) fresh, regardless of client claims"]
+
+        subgraph DEPLOYBOUNDARY["DEPLOYMENT BOUNDARY - AWS me-central-2 (Saudi-compliant region), single VPC"]
+
+            subgraph BACKEND["SAKHARI ECOM PLATFORM - single modular-monolith Backend"]
+                direction TB
+
+                subgraph IDCLUSTER["Identity & Profile"]
+                    idmods["Auth * User * Store"]
+                end
+
+                subgraph COMMCLUSTER["Catalog & Commerce"]
+                    commmods["Catalog * Search * Inventory\nCart * Order * Payment * Promotion"]
+                end
+
+                subgraph FULCLUSTER["Fulfillment & Support"]
+                    fulmods["Delivery * Notification * Support"]
+                end
+
+                subgraph PLATCLUSTER["Platform & Governance"]
+                    platmods["Analytics * Audit * Settings"]
+                end
+
+                IDCLUSTER --> COMMCLUSTER
+                COMMCLUSTER -->|"PRIMARY EVENT FLOW:\nOrderPlaced -> OrderReadyForFulfillment\n(async, via transactional outbox)"| FULCLUSTER
+                COMMCLUSTER -.->|"async domain events"| PLATCLUSTER
+                FULCLUSTER -.->|"async domain events"| PLATCLUSTER
+            end
+
+            subgraph DATASTORES["Data Stores"]
+                direction LR
+                pg[("PostgreSQL\nsystem of record")]
+                redis[("Redis\ncache/session/coordination")]
+                s3[("S3\nmedia & files")]
+            end
+
+            BACKEND --> DATASTORES
+        end
+    end
+
+    CLIENTS -->|"HTTPS / versioned REST API"| SECBOUNDARY
+
+    subgraph EXTERNAL["External Integrations - reached ONLY from Backend"]
+        direction LR
+        moyasar(["Moyasar\npayment gateway"])
+        unifonic(["Unifonic\nSMS/OTP"])
+        pushsvc(["Push Notification\nprovider"])
+        maps(["Google Maps\ngeocoding"])
+    end
+
+    BACKEND -->|"outbound only,\nper-integration owner"| EXTERNAL
+
+    classDef actor fill:#e8eef7,stroke:#4a6fa5,color:#1a1a1a
+    classDef client fill:#eaf2e4,stroke:#5a8f3c,color:#1a1a1a
+    classDef cluster fill:#f0e6f6,stroke:#7c4a9e,color:#1a1a1a
+    classDef data fill:#e7f5ea,stroke:#3f8f52,color:#1a1a1a
+    classDef ext fill:#fdf3d9,stroke:#c99a2e,color:#1a1a1a
+
+    class actors actor
+    class custApps,workerApp,adminApp client
+    class idmods,commmods,fulmods,platmods cluster
+    class pg,redis,s3 data
+    class moyasar,unifonic,pushsvc,maps ext
