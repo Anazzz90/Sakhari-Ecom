@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Date:** July 24, 2026  
-**Status:** Draft  
+**Status:** Approved for architecture implementation  
 **Source of Truth:** `SRD_Sakhari_Ecom_v2.6_Saudi.md`  
 **Prepared For:** Solo, AI-assisted development
 
@@ -269,7 +269,8 @@ Rationale: Redis state can expire, be evicted, or be rebuilt. Financial and oper
 | Payment History | Payment | History | Immutable | No | Inherent | Yes | Order-scoped |
 | Cash Remittance | Payment | Finance Operational | State-driven | No | Yes | Yes | Store/shift-scoped |
 | Card-on-Delivery Record | Payment | Finance Operational | State-driven | No | Yes | Yes | Store/shift-scoped |
-| Refund | Refund | Transactional Finance | State-driven | No | Yes | Yes | Order/payment-scoped |
+| Refund | Refund | Transactional Finance | State-driven | No | Yes | Yes | Order/payment-scoped, line-item aware (ADR-0038) |
+| Payment Ledger | Payment | Ledger | Immutable | No | Inherent | Yes | Order-scoped |
 | Promotion | Promotion | Configuration | State-driven | Archive | Yes | Yes | Global/store-scoped |
 | Promo Code | Promotion | Configuration | State-driven | Archive | Yes | Yes | Global/store-scoped |
 | Promotion Usage | Promotion | Transactional History | Immutable | No | Inherent | Yes | Customer/order-scoped |
@@ -970,16 +971,16 @@ Delivery Module.
 Assignment, acceptance, rejection, expiry, pickup, delivery, failed delivery, and cancellation.
 
 **Core Fields**  
-Order reference, rider worker reference, store reference, state, assignment/accept/pickup/delivery timestamps, failure reason, OTP/proof status, and reassignment context.
+Order reference, rider worker reference, store reference, state, assignment/accept/pickup/delivery timestamps, failure reason, OTP/proof status, reassignment context, and (per ADR-0034) an optional batch reference and sequence-in-batch position, both nullable.
 
 **Relationships**  
-Belongs to order, rider, and store. References payment collection and rider location history.
+Belongs to order, rider, and store. References payment collection and rider location history. Optionally belongs to one Delivery Batch (Section 5.40) as one of its Delivery Stops (Section 5.41) — this reference is the only thing batching adds to this entity; nothing else about it changes.
 
 **Lifecycle**  
-Follows SRD Delivery Assignment State Machine.
+Follows SRD Delivery Assignment State Machine (Section 10.5), unchanged by batching — a batched assignment moves through exactly the same states, independently of any other assignment sharing its batch.
 
 **Constraints**  
-Assignment cannot exist before order is packed. Rider pool is store-scoped for MVP. One active delivery per rider unless batching is introduced later.
+Assignment cannot exist before order is packed. Rider pool is store-scoped for MVP. One active delivery, or one active batch of up to two (ADR-0034, SRD BR-017), per rider.
 
 **Retention**  
 Retained for SLA, support, failed delivery, and productivity reports.
@@ -988,7 +989,7 @@ Retained for SLA, support, failed delivery, and productivity reports.
 Manual reassignment, cancellation, failed delivery support corrections, and admin overrides are audited.
 
 **Notes**  
-Rejected/expired assignments return to same store pool.
+Rejected/expired assignments return to same store pool. A cancelled or failed batched assignment is audited and released exactly like a non-batched one (Section 12) — its batch reference does not change how its own lifecycle or audit trail is recorded.
 
 ### 5.23 Rider Location
 
@@ -1159,19 +1160,19 @@ Represents money or manual compensation owed back to customer.
 Refund Module.
 
 **Responsibilities**  
-Eligibility, amount, reason, approval, processing, settlement, and failure tracking.
+Eligibility, amount, reason, approval, processing, settlement, and failure tracking. Per ADR-0038, line-item aware: a refund identifies exactly which order item(s) and quantities it corresponds to, not only an aggregate order-level amount.
 
 **Core Fields**  
-Order/payment reference, refund amount, currency, reason, state, approval actor, settlement context, failure reason, and timestamps.
+Order/payment reference, refund amount, currency, reason, state, approval actor, settlement context, failure reason, timestamps, and (per ADR-0038) one or more refund line entries, each carrying: order item reference, quantity, original unit price (read from the order's Price Snapshot, §5.32 — never recomputed from current catalog price), and refunded amount for that line.
 
 **Relationships**  
-Belongs to order/payment. May relate to order items and support ticket.
+Belongs to order/payment. References one or more order items at line granularity (ADR-0038), each line's amount grounded in the order's own Price Snapshot. May relate to a support ticket.
 
 **Lifecycle**  
-Follows SRD Refund State Machine.
+Follows SRD Refund State Machine. Multiple partial refunds may exist per order (ADR-0038); each is its own Refund record.
 
 **Constraints**  
-Refund amount uses order price snapshots, not current catalog price. Completed refunds are immutable except corrective refund records.
+Refund amount uses order price snapshots, not current catalog price. A line's refunded amount reflects the same promotion adjustment already applied to that line at order time — a refund never re-runs promotion eligibility. The cumulative refunded amount across all of an order's non-rejected, non-cancelled Refund records must never exceed the order's paid total. Completed refunds are immutable except corrective refund records.
 
 **Retention**  
 Retained long-term for finance/accounting.
@@ -1533,6 +1534,106 @@ No routine audit; manual correction requires audit.
 
 **Notes**  
 May use JSONB for metric payloads if metric shape varies.
+
+---
+
+### 5.40 Delivery Batch
+
+**Purpose**  
+Represents a rider-scoped, store-scoped grouping of up to two (MVP) independent Delivery Assignments into one operational trip, per ADR-0034. Resolves the extension point DDD Section 17.4 named in advance.
+
+**Ownership**  
+Delivery Module.
+
+**Responsibilities**  
+Batch formation, driver assignment/acceptance, tracking overall batch progress, and batch completion/cancellation — never any responsibility already owned by the Delivery Assignments it groups (order status, payment, inventory, or the assignment state machine itself).
+
+**Core Fields**  
+Batch reference, assigned rider worker reference, store reference, batch status, creation timestamp, assignment timestamp, completion timestamp.
+
+**Relationships**  
+Belongs to one store and (once assigned) one rider. Has an ordered list of Delivery Stops (Section 5.41), each referencing exactly one Delivery Assignment. A batch never references an Order, Payment, or Inventory Reservation directly — only indirectly, through the Delivery Assignment each stop points to.
+
+**Lifecycle**  
+Follows SRD Section 10.5.1's Batch State Machine (Forming → Created → Assigned → In Progress → Completed, or Cancelled). Does not replace or gate the Delivery Assignment State Machine (Section 10.5) — the two lifecycles run in parallel, with the batch's own status derived from, never dictating, each stop's assignment state.
+
+**Constraints**  
+All stops in a batch share the same store (SRD BR-021). Maximum two active Delivery Assignments per batch for MVP (SRD FR-BATCH-001, configurable per ADR-0034). A rider holds at most one active batch at a time (SRD BR-017).
+
+**Retention**  
+Retained for operational efficiency reporting (orders-per-trip, batch completion time) alongside the Delivery Assignment records it groups.
+
+**Audit Requirements**  
+Batch creation, driver assignment, cancellation, and any manual re-sequencing or ops override are audited (Section 12) — consistent with every other consequential Delivery action, and independent of the audit trail already required for each Delivery Assignment in the batch.
+
+**Notes**  
+A batch is purely an operational grouping. It never becomes the transactional unit for anything — each grouped order's placement, payment, and inventory reservation remain entirely its own module's concern, exactly as if it had never been batched.
+
+### 5.41 Delivery Stop
+
+**Purpose**  
+Represents one ordered position within a Delivery Batch's route, pointing to exactly one Delivery Assignment.
+
+**Ownership**  
+Delivery Module.
+
+**Responsibilities**  
+Sequence position only. A stop has no status of its own — its completion, failure, or cancellation is read entirely from the Delivery Assignment it references (Section 5.22).
+
+**Core Fields**  
+Batch reference, delivery assignment reference, sequence number.
+
+**Relationships**  
+Belongs to exactly one Delivery Batch and references exactly one Delivery Assignment (and, through it, exactly one order).
+
+**Lifecycle**  
+Created when a batch is formed; its sequence number may be updated if the route is recalculated (SRD FR-BATCH-010) — a route recalculation reorders stops, it never changes which assignment a stop points to.
+
+**Constraints**  
+A given Delivery Assignment appears in at most one Delivery Stop at a time (an assignment cannot be double-batched). Sequence numbers within a batch are unique and contiguous.
+
+**Retention**  
+Retained alongside its owning Delivery Batch.
+
+**Audit Requirements**  
+A manual re-sequencing is audited as part of the batch's own audit trail (Section 5.40); a stop's underlying delivery outcome is audited through its Delivery Assignment, not duplicated here.
+
+**Notes**  
+Deliberately has no independent status field — this is what keeps "order status remains independent" true by construction rather than by discipline: there is no second place a stop's completion could be recorded differently from its Delivery Assignment's own state.
+
+---
+
+### 5.42 Payment Ledger
+
+**Purpose**  
+Append-only, immutable record of every financial movement against an order — structurally the same role the Inventory Ledger (Section 5.15) plays for stock, applied to money, per ADR-0037.
+
+**Ownership**  
+Payment Module.
+
+**Responsibilities**  
+Recording each financial movement as its own entry: Payment Authorized, Payment Captured, COD Collected, Card-on-Delivery Collected, Refund Issued, Refund Reversed, Settlement Recorded, Adjustment, and Chargeback.
+
+**Core Fields**  
+Ledger ID, payment reference, order reference, entry type, amount (integer halala, Section 1.11), currency, reference (gateway/provider reference where applicable), source (actor or system process that produced the entry), and timestamp (UTC, Section 1.3).
+
+**Relationships**  
+Belongs to payment/order. Referenced by, but never the same record as, Payment History (Section 5.25) — Payment History is a state-transition log for one Payment record; the Payment Ledger is a movement-level financial history spanning payments, refunds, and collections across an order's full financial lifecycle.
+
+**Lifecycle**  
+Append-only. A ledger entry is written in the same transaction as the financial-state change it records.
+
+**Constraints**  
+Never updated or deleted. A payment's current authorized/captured/refunded totals are derived from ledger history where appropriate; the ledger, not the current-state fields alone, is what makes a payment's state explainable rather than merely visible.
+
+**Retention**  
+Retained long-term, same retention class as Payment History and the Inventory Ledger.
+
+**Audit Requirements**  
+Every entry is inherently part of the financial audit trail; reconciliation against payment-provider settlement reports (Moyasar, POS/terminal) is performed against the ledger, mirroring Inventory Reconciliation's use of the Inventory Ledger (Section 15.4).
+
+**Notes**  
+A delivery-collected cash/card-on-delivery payment (ADR-0035) produces a ledger entry written by Payment, never by Delivery. A line-item refund (ADR-0038) produces a Refund Issued (or Refund Reversed) entry alongside its own Refund record.
 
 ---
 
@@ -2034,6 +2135,9 @@ Expire abandoned carts, temporary draft records, old notification metadata, and 
 ### 15.7 Rollup Generation
 Generate analytics snapshots for Admin Dashboard and reports. Rollups must be rebuildable.
 
+### 15.8 Batch Formation Evaluation (ADR-0034)
+Scheduled sweep, short interval, over packed/awaiting-rider orders per store: evaluates delivery-batching eligibility (proximity, readiness-time tolerance, rider capacity, SLA headroom — Settings-owned thresholds) and forms a Delivery Batch where two eligible orders are found before either order's own individual rider-assignment timeout (SRD BR-020) would otherwise fire. An order is never held past its own timeout waiting for a batch partner — batching is opportunistic, never a reason to delay an otherwise-ready delivery.
+
 ---
 
 ## 16. Performance Strategy
@@ -2088,8 +2192,8 @@ Dark stores can evolve into store/warehouse entities with different fulfillment 
 ### 17.3 Marketplace
 Marketplace support would introduce sellers/suppliers, seller-owned catalog, settlement, and multi-party order accounting. Current product/category/brand and supplier-funded promotion concepts leave room for this but do not implement it.
 
-### 17.4 Batch Delivery
-Batch delivery would change delivery assignment cardinality from one order per rider delivery to route/batch groupings. Current design should avoid assuming delivery assignment can never relate to future route grouping.
+### 17.4 Batch Delivery — Resolved (ADR-0034)
+Batch delivery is implemented as of ADR-0034: Delivery Assignment (Section 5.22) carries an optional batch reference; Delivery Batch (Section 5.40) and Delivery Stop (Section 5.41) group up to two assignments per rider trip for MVP. Delivery assignment cardinality remains one order per Delivery Assignment — batching changes rider trip cardinality, not order-to-assignment cardinality. A larger future batch size is a configuration change (Settings-owned thresholds), not a data-model change, per ADR-0034's own reconsideration conditions.
 
 ### 17.5 Loyalty
 Loyalty would add customer points/wallet ledgers. It should follow ledger principles, not mutable balances only.

@@ -124,6 +124,8 @@ Narrative walkthroughs only — no code, no message payloads (those belong to `0
 7. Order publishes `OrderPlaced`. Notification and Analytics consume it asynchronously; nothing waits on their reaction.
 8. Later, Payment's gateway integration resolves the payment and Payment publishes `PaymentAuthorized` (or `PaymentFailed`). Order consumes this event and updates order status accordingly — this step is fully decoupled in time from the original request/response cycle.
 9. Once payment is confirmed, Order publishes `OrderReadyForFulfillment`. Delivery consumes it and begins picking-session orchestration, entirely outside Order's own transaction or request/response cycle.
+10. Once packed, Delivery may — per ADR-0034 — group this order with another eligible, same-store packed order into a Delivery Batch before assigning a rider. This is entirely a Delivery-internal decision over data Delivery already owns: it opens no new dependency, calls no other module, and Order remains unaware a batch exists — Order still only ever receives `DeliveryAssigned`/`DeliveryCompleted`/`DeliveryFailed` scoped to its own order, exactly as in step 9, whether or not that delivery happened to share a rider trip with another order.
+11. If the rider cannot complete the delivery, Delivery publishes `DeliveryFailed` (per ADR-0036) instead of `DeliveryCompleted`; Order consumes it and advances to its own "Failed Delivery" state (SRD Section 10.1). If the delivery succeeds and the order was cash-on-delivery or card-on-delivery, Delivery publishes `DeliveryCompletedWithPayment` alongside `DeliveryCompleted` (per ADR-0035); Order consumes it, validates order state, and forwards the collected amount to Payment's existing `RecordCashCollection`/`RecordCardOnDeliveryCollection` interface — Delivery itself never calls Payment or writes to any Payment-owned table.
 
 **Example 2 — Product search, an event-driven read model staying in sync:**
 1. An Admin updates a product's price through the Admin/Ops Dashboard. The request reaches Catalog's `UpdateProduct` interface.
@@ -156,5 +158,6 @@ This is the concrete payoff of every rule in this document: the discipline costs
 
 ## 12. Open Decisions
 
-- **Automated circular-dependency and boundary enforcement tooling** (Section 9) is named as a future direction, not a current commitment — no specific tool or timeline is decided here.
+- Automated circular-dependency and boundary enforcement tooling (Section 9) — previously open here — is resolved by `coding-standards.md` Section 12 (static analysis/import restrictions, CI validation, architecture tests); only the specific lint package remains an open, below-architecture-level pick (`coding-standards.md` Section 14).
+- The delivery-collected-payment and delivery-failure event flows (Section 10, Example 1, steps 10–11) — previously undocumented, identified by the 2026-07-30 Architecture Readiness Review — are resolved by ADR-0035 and ADR-0036 and must not be treated as open going forward. Neither introduces a new dependency edge: both route through Order, which already depends on both Delivery and Payment.
 

@@ -29,7 +29,7 @@ Every term has a **Definition** (what it means, in plain language), **Context wi
 
 **Definition:** A single, immutable document recording one significant, hard-to-reverse architectural decision — the context that forced it, the options considered, the choice made, and the consequences accepted.
 
-**Context within Sakhari Ecom:** Every significant decision in this project (from the modular monolith itself to the choice of Moyasar as payment gateway) is recorded as a numbered ADR under `decisions/`, currently numbered 0001 through 0028. ADRs are never edited after being marked `Accepted` — a changed decision is a new ADR that supersedes the old one (`decisions/README.md`).
+**Context within Sakhari Ecom:** Every significant decision in this project (from the modular monolith itself to the choice of Moyasar as payment gateway) is recorded as a numbered ADR under `decisions/`, numbered sequentially — see `decisions/README.md` for the current count rather than a specific number here, which would otherwise drift out of date as new ADRs are added. ADRs are never edited after being marked `Accepted` — a changed decision is a new ADR that supersedes the old one (`decisions/README.md`).
 
 **Related Terms:** Source of Truth, Modular Monolith.
 
@@ -177,7 +177,23 @@ Every term has a **Definition** (what it means, in plain language), **Context wi
 
 **Context within Sakhari Ecom:** Owned by the Delivery module together with in-store Picking (DDD Section 6.4/ADR-0020 folded Picking into Delivery's boundary) — Delivery Assignment and Rider Location are the entities involved (DDD §5.22–5.23).
 
-**Related Terms:** Picking, Order, Worker.
+**Related Terms:** Picking, Order, Worker, Delivery Batch.
+
+### Delivery Batch
+
+**Definition:** An operational grouping of up to two (MVP) independent Delivery Assignments into a single rider trip, per ADR-0034.
+
+**Context within Sakhari Ecom:** Owned entirely by the Delivery module (DDD §5.40) — never a second owner of the Orders, Payments, or Inventory Reservations it groups. A batch does not replace an individual delivery; it groups Delivery Stops (DDD §5.41), each pointing to one unchanged Delivery Assignment. Cancelling one order in a batch never affects the other — this is the load-bearing distinction between "grouped operationally" and "merged as one business entity."
+
+**Related Terms:** Delivery Assignment, Delivery Stop, Delivery.
+
+### Delivery Stop
+
+**Definition:** One ordered position within a Delivery Batch's route, pointing to exactly one Delivery Assignment.
+
+**Context within Sakhari Ecom:** Deliberately carries no status of its own (DDD §5.41) — a stop's completion is always read from the Delivery Assignment it references, never tracked a second time. This is what keeps "order status remains independent" true by construction rather than convention (ADR-0034).
+
+**Related Terms:** Delivery Batch, Delivery Assignment.
 
 ### Distributed Lock
 
@@ -249,9 +265,9 @@ Every term has a **Definition** (what it means, in plain language), **Context wi
 
 **Definition:** An append-only record of every movement of a quantity (stock, cash) and the reason for it, explaining how the current state came to be true.
 
-**Context within Sakhari Ecom:** The Inventory Ledger (DDD §5.15) is the canonical example — immutable, append-only, and the mechanism that makes a stock discrepancy *explainable*, not just *visible* (`data-architecture.md` Section 8).
+**Context within Sakhari Ecom:** The Inventory Ledger (DDD §5.15) is the canonical example — immutable, append-only, and the mechanism that makes a stock discrepancy *explainable*, not just *visible* (`data-architecture.md` Section 8). The Payment Ledger (DDD §5.42, ADR-0037) applies the identical structure to money.
 
-**Related Terms:** Inventory, Audit, Source of Truth.
+**Related Terms:** Inventory, Payment Ledger, Audit, Source of Truth.
 
 **Notes:** Do not confuse a Ledger with an Audit Log — a Ledger explains quantity/financial movement; an Audit Log records who did what and why, for compliance and accountability (DDD §12.7 draws this distinction explicitly).
 
@@ -304,6 +320,16 @@ Every term has a **Definition** (what it means, in plain language), **Context wi
 **Context within Sakhari Ecom:** The sole authentication mechanism for every actor — no passwords exist anywhere in this system (ADR-0027) — delivered via Unifonic (ADR-0023), and reused for rider delivery-confirmation as well as login (`security-and-compliance.md` Section 4).
 
 **Related Terms:** Authentication, JWT.
+
+**Notes:** OTP requests and verification attempts are rate-limited by concrete, configurable defaults (5 requests/phone/hour, 5 attempts/code, 30-minute lockout — ADR-0039) — closing what was previously an unspecified rate-limiting statement.
+
+### Payment Ledger
+
+**Definition:** An append-only, immutable record of every financial movement against an order (authorization, capture, collection, refund, adjustment, chargeback).
+
+**Context within Sakhari Ecom:** Owned by the Payment module (ADR-0037), structurally identical to the Inventory Ledger's role for stock — it is what makes a payment's current state *explainable*, not merely *visible*, and is what reconciliation against payment-provider settlement reports (Moyasar, POS) is performed against.
+
+**Related Terms:** Ledger, Payment, Audit Log.
 
 ### Permission
 
@@ -381,7 +407,7 @@ Every term has a **Definition** (what it means, in plain language), **Context wi
 
 **Definition:** Money or compensation owed back to a customer for a completed or partially completed order.
 
-**Context within Sakhari Ecom:** Owned by the Payment module (folded in per ADR-0020) as a payment-reversal operation — Payment executes and records a refund; whether an order is *eligible* for one on business grounds is a currently open question between Order's own logic and Support's human-driven workflow (`capability-boundary-map.md` Section 8).
+**Context within Sakhari Ecom:** Owned by the Payment module (folded in per ADR-0020) as a payment-reversal operation, line-item aware and supporting multiple partial refunds per order (ADR-0038). Order owns automatic refund-eligibility rules from order state, cancellation reason, delivery failure, or substitution outcome; Support may initiate a refund request with a reason; Payment executes and records the refund once eligibility is approved (ADR-0033).
 
 **Related Terms:** Payment, Order, Support.
 
@@ -400,6 +426,14 @@ Every term has a **Definition** (what it means, in plain language), **Context wi
 **Context within Sakhari Ecom:** Owned by the Inventory module as Inventory Reservation (DDD §5.14); created by Order calling Inventory synchronously as the step immediately following order-record creation (`module-communication.md` Section 7).
 
 **Related Terms:** Inventory, Distributed Lock, Order.
+
+### Resource Scope
+
+**Definition:** The general concept of authorization being restricted not just to *what* operation an actor may perform, but to *which specific resource instance* they may perform it against.
+
+**Context within Sakhari Ecom:** Store is currently the only instance of Resource Scope (ADR-0041) — an actor's Permission must be evaluated together with their Assigned Stores before a store-scoped operation is authorized. Named generally so a future dimension (Region, per DDD Section 17.1) extends the same evaluation model rather than requiring a new mechanism.
+
+**Related Terms:** Store Scope, RBAC, Permission.
 
 ### Role
 
@@ -460,6 +494,22 @@ Every term has a **Definition** (what it means, in plain language), **Context wi
 **Related Terms:** Branch (not used), Warehouse (not used), Inventory.
 
 **Notes:** Sakhari Ecom uses "Store" for both the entity name and the informal term for the physical location — there is no separate "Branch" or "Warehouse" concept in this project (see those entries).
+
+### Store Scope
+
+**Definition:** The set of stores an operational user (Picker, Rider, Admin, Ops, Support) is authorized to act against — the current, only instance of Resource Scope.
+
+**Context within Sakhari Ecom:** Carried as Assigned Stores, evaluated alongside Permission before any store-scoped operation is authorized — `order:manage` for Store A does not authorize the same operation against Store B (ADR-0041). Owned by Auth as authorization-claim state, the same "Auth-internal, not separately named in the DDD" treatment already established for Session/Refresh Token.
+
+**Related Terms:** Resource Scope, RBAC, Store.
+
+### Step-Up Authentication
+
+**Definition:** A second, independent verification step, performed in addition to an actor's existing authenticated session, required before a specific high-risk operation.
+
+**Context within Sakhari Ecom:** Required for four privileged roles — Super Admin, Operations Manager, Finance, Support Lead — before refund approval, permission changes, settings changes, financial adjustments, or sensitive audit access (ADR-0040). Uses TOTP or an approved enterprise MFA mechanism, evaluated fresh at the moment of the operation, never cached across a session the way a permission claim is — closing the SIM-swap risk ADR-0027 named without a compensating control.
+
+**Related Terms:** OTP, Authentication, RBAC.
 
 ### Thin Controller
 

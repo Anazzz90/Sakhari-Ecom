@@ -166,7 +166,7 @@ The backend is organized around the business capabilities evident from the final
 | Ordering | Order creation, order lifecycle state, and the transactional core that ties a customer's request to inventory reservation and payment (Principle 4.9). |
 | Pricing & Promotions | Price calculation, discounts, and promotional rules applied consistently regardless of which customer client initiated the order (Principle 4.6). |
 | Payments | Payment authorization and capture across mada, card, BNPL, and cash-on-delivery, and the record of what was actually charged (Principle 4.10). |
-| Dispatch & Fulfillment | Assignment and tracking of picking and delivery tasks to Pickers and Riders, store-scoped per the finalized worker-assignment model. |
+| Dispatch & Fulfillment | Assignment and tracking of picking and delivery tasks to Pickers and Riders, store-scoped per the finalized worker-assignment model, including grouping eligible deliveries into a single rider trip where operationally efficient (ADR-0034) — an optimization within this same capability, never a new one. |
 | Store & Operations Management | Store definitions, worker-to-store assignment, and the operational configuration Admin/Ops manages. |
 | Notifications | Outbound customer and worker communication (order status, OTP, delivery updates), consuming events raised elsewhere rather than being called synchronously by them (Principle 4.8). |
 | Admin, Reporting & Analytics | Cross-cutting visibility for Admin/Ops — built as an explicit read path over the capabilities above, never a shortcut into their live tables (Principle 4.5's reporting exception). |

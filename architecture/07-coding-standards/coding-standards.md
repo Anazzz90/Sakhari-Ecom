@@ -21,7 +21,7 @@
 
 Every module's internal folder structure mirrors its boundary exactly (ADR-0009): a module's directory contains its own service layer, its own data-access code, and its own public-interface definitions, and nothing outside that directory ever imports its internals — only its declared public interface (`module-communication.md` Section 5). This is the structural, on-disk expression of "no cross-module repository access," not merely a convention layered on top of it: if a module's data-access code is not importable from outside its own directory, the anti-pattern becomes structurally awkward to commit by accident, not just against the rules.
 
-**Whether the Backend and the four client applications live in one repository (a monorepo) or five separate repositories (one per deployable, matching ADR-0017's independent-release-cadence reasoning) is not decided in any prior document.** This document does not assert one — see Open Decisions (Section 12). What it does establish, regardless of the answer: wherever the Backend's code lives, its internal structure follows the module boundaries in `module-catalog.md` exactly — sixteen module directories, one per module, named identically to the module names used throughout this documentation set (Auth, User, Store, Catalog, Search, Inventory, Cart, Order, Payment, Promotion, Delivery, Notification, Support, Analytics, Audit, Settings).
+**Whether the Backend and the four client applications live in one repository (a monorepo) or five separate repositories (one per deployable, matching ADR-0017's independent-release-cadence reasoning) is not decided in any prior document.** This document does not assert one — see Open Decisions (Section 14). What it does establish, regardless of the answer: wherever the Backend's code lives, its internal structure follows the module boundaries in `module-catalog.md` exactly — sixteen module directories, one per module, named identically to the module names used throughout this documentation set (Auth, User, Store, Catalog, Search, Inventory, Cart, Order, Payment, Promotion, Delivery, Notification, Support, Analytics, Audit, Settings).
 
 ## 3. Module Structure
 
@@ -66,7 +66,7 @@ Tests protect business rules, not implementation shape (Constitution Section 8's
 - **Correctness-critical paths get the most rigorous coverage**, directly proportional to Principle 4.1's ordering: checkout (order placement, inventory reservation, payment initiation — `module-communication.md` Section 10) and the named race conditions (`data-architecture.md` Section 13 — concurrent reservation attempts, duplicate payment callbacks, duplicate delivery assignment) require explicit tests proving the concurrency and idempotency guarantees actually hold, not just the happy path.
 - **Idempotency is tested directly** for every workflow `data-architecture.md` Section 13 and `integration-and-messaging.md` Section 9 name as idempotency-required — a test that only exercises a workflow once has not verified the guarantee that actually matters for those workflows.
 - **The consumer tier's graceful-degradation behavior is tested for the failure case, not only the success case** (`reliability-and-performance.md` Section 3) — a test verifying that a Notification failure does not block order placement is as important as a test verifying a notification is sent successfully.
-- Tests are written in the same language as the code they test, consistent with the TypeScript-centered stack (ADR-0005) — this document does not name a specific test framework, since none is decided in any prior document (Section 12).
+- Tests are written in the same language as the code they test, consistent with the TypeScript-centered stack (ADR-0005) — this document does not name a specific test framework, since none is decided in any prior document (Section 14).
 
 ## 9. Documentation Standards
 
@@ -103,17 +103,29 @@ A separate, higher-level pass — for changes that might affect the architecture
 - [ ] Does this change add a synchronous dependency on Notification, Analytics, Audit, or Search to a business operation's completion, outside the one named exception (`module-communication.md` Section 3)?
 - [ ] Does this change contradict any `Accepted` ADR? If the contradiction is intentional, is a new, superseding ADR being proposed alongside it (`decisions/README.md`'s lifecycle rules)?
 
-## 12. Trade-offs and Future Evolution
+## 12. Module Boundary Enforcement
+
+Section 2's "structurally awkward to commit by accident" claim is only as strong as what actually checks it. Boundary enforcement in this system is layered, so no single missed step lets a violation reach Production:
+
+- **Static analysis / import restrictions.** A dependency-boundary lint rule (an import-restriction tool such as `eslint-plugin-boundaries` or `dependency-cruiser` — the specific package is an SDD-level pick, not an architectural decision) is configured with one rule per module, mechanically encoding `module-catalog.md`'s Dependencies and Forbidden Dependencies fields: a module's internals (its data-access and service-layer code, Section 3) are only importable from within that module's own directory, and a module may only import another module's declared public interface, never its internals. This makes ADR-0009's "no cross-module repository access" a build-time failure, not a review-time judgment call.
+- **CI validation.** This lint rule runs as a required check in the GitHub Actions pipeline (ADR-0030) on every change, alongside the automated test stage (`infrastructure-and-release.md` Section 11) — a change that violates a module boundary fails CI before it can merge, the same gate every other required check already passes through.
+- **Architecture tests.** Beyond import-shape linting, a small set of architecture-level tests assert structural invariants that a lint rule alone can't always express cleanly: that the dependency graph among the sixteen modules (`module-communication.md` Section 6) remains acyclic, and that no module's test suite reaches into another module's data-access layer directly. These run in the same CI pipeline as ordinary tests, not as a separate, optional process.
+- **Code review expectations.** The Architecture Compliance Checklist (Section 11) remains the human-judgment layer — CI and lint tooling catch mechanical violations (an import across a boundary), but a reviewer is still responsible for judgment calls tooling cannot make (does this change's *design*, not just its imports, respect a module's boundary — e.g., a new operation that technically stays inside a module's own files but re-implements another module's responsibility).
+
+**Why layered rather than review-only:** review discipline alone degrades under time pressure and does not scale past one reviewer's attention; static analysis and CI make the mechanical half of boundary enforcement unconditional, freeing code review to focus on the judgment calls that genuinely need a person. This is not a new architectural boundary — it is `module-catalog.md` and ADR-0009's existing boundary, made enforceable rather than merely documented.
+
+## 13. Trade-offs and Future Evolution
 
 **Trade-off accepted:** this document deliberately does not mandate a specific test framework, linter, formatter, or repository topology — those are left as tooling choices to be made (and recorded, if significant enough to warrant an ADR) rather than asserted here without a documented basis, consistent with this whole task's instruction not to invent decisions. The cost is that this document is slightly less immediately actionable than a full style guide would be; the benefit is that it does not silently misrepresent an undecided question as settled.
 
-**Future evolution:** as those tooling choices are made, this document's checklists (Sections 10–11) are the right place to add tool-specific items (a specific linter rule, a specific coverage threshold) — the checklists themselves are expected to grow; the principles behind them (Sections 2–9) are expected to hold.
+**Future evolution:** as those tooling choices are made, this document's checklists (Sections 10–11) and its boundary-enforcement rules (Section 12) are the right place to add tool-specific items (a specific linter rule, a specific coverage threshold) — the checklists themselves are expected to grow; the principles behind them (Sections 2–9, 12) are expected to hold.
 
-## 13. Open Decisions
+## 14. Open Decisions
 
 - **Monorepo vs. polyrepo** for the Backend and four client applications (Section 2) — not decided in any prior document.
-- **Specific test framework, linter, and formatter** (Section 8, Section 12) — not decided; this document establishes what must be true of tests and code quality, not which tools enforce it.
+- **Specific test framework, linter, and formatter, including the exact import-restriction package used for Section 12's boundary lint** (Section 8, Section 12, Section 13) — not decided; this document establishes what must be true of tests, code quality, and boundary enforcement, not which tools implement them.
 - **Specific code-coverage thresholds** for correctness-critical paths (Section 8) — not decided; "proportional to correctness criticality" is the principle, not a percentage.
 - **Whether module directories live in a shared "modules" root or are otherwise organized within the Backend repository** — a below-architecture-level detail, left to whichever SDD or initial project scaffold is authored first.
+- Module boundary enforcement mechanism — previously open here — is resolved by Section 12 above (static analysis, CI validation, architecture tests, layered with code review) and must not be treated as open going forward; only the specific tool package remains a below-architecture pick.
 
 

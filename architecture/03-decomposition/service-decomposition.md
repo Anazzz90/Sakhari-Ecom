@@ -79,12 +79,12 @@ Public Services restate `module-catalog.md`'s Public Interfaces grouped into nam
 | Field | Detail |
 |---|---|
 | **Purpose** | Establish and prove identity for every actor and request. |
-| **Public Services** | AuthenticationService (RequestOtp, VerifyOtp), SessionService (IssueTokenPair, RefreshAccessToken, RevokeSession, ValidateToken) |
+| **Public Services** | AuthenticationService (RequestOtp, VerifyOtp), SessionService (IssueTokenPair, RefreshAccessToken, RevokeSession, ValidateToken), StepUpAuthenticationService (InitiateStepUpChallenge, VerifyStepUpChallenge — ADR-0040) |
 | **Internal Services** | TokenSigningService — signs/verifies tokens on behalf of SessionService, never called directly by anything outside Auth |
-| **Application Services** | LoginOrchestrationService — coordinates OTP verification, Notification dispatch, and token issuance as one business operation |
-| **Domain Services** | OtpExpiryPolicy, TokenClaimRules — pure rules with no awareness of Notification or any other module |
-| **Repositories** | UserCredentialRepository, SessionRepository |
-| **Published Events** | `UserAuthenticated`, `OtpRequested`, `SessionRevoked` |
+| **Application Services** | LoginOrchestrationService — coordinates OTP verification, Notification dispatch, and token issuance as one business operation; StepUpChallengeOrchestrationService (ADR-0040) |
+| **Domain Services** | OtpExpiryPolicy, TokenClaimRules, OtpAbuseProtectionRules (ADR-0039 — request/attempt/lockout thresholds), StoreScopeEvaluationRules (ADR-0041 — pure rule with no awareness of any other module, evaluated after permission but before an operation proceeds) — pure rules with no awareness of Notification or any other module |
+| **Repositories** | UserCredentialRepository, SessionRepository, StoreScopeAssignmentRepository (ADR-0041) |
+| **Published Events** | `UserAuthenticated`, `OtpRequested`, `SessionRevoked`, `StepUpAuthenticationCompleted`, `StepUpAuthenticationFailed` (ADR-0040) |
 | **Consumed Events** | None |
 | **Transaction Boundaries** | Each login/session operation (OTP verification plus token issuance) commits within one Auth-local transaction, over `users`/`sessions`/`refresh_tokens` only |
 | **Dependencies** | Notification (OTP dispatch) |
@@ -197,7 +197,7 @@ Public Services restate `module-catalog.md`'s Public Interfaces grouped into nam
 | **Domain Services** | OrderEligibilityRules, PriceSnapshotRules |
 | **Repositories** | OrderRepository, OrderItemRepository, OrderEventRepository, PriceSnapshotRepository |
 | **Published Events** | `OrderPlaced`, `OrderCancelled`, `OrderStatusChanged`, `OrderReadyForFulfillment` |
-| **Consumed Events** | `PaymentAuthorized`, `PaymentFailed`, `PaymentCaptured`, `InventoryReservationFailed`, `PickingCompleted`, `DeliveryCompleted` |
+| **Consumed Events** | `PaymentAuthorized`, `PaymentFailed`, `PaymentCaptured`, `InventoryReservationFailed`, `PickingCompleted`, `DeliveryCompleted`, `DeliveryFailed` (ADR-0036), `DeliveryCompletedWithPayment` (ADR-0035 — forwarded to Payment's PaymentService, never recorded by Order itself) |
 | **Transaction Boundaries** | Order-record creation is its own transaction; each downstream step (Inventory reservation, Payment initiation) is that module's own separate transaction, coordinated by CheckoutOrchestrationService with explicit compensation on failure — never one transaction spanning modules (ADR-0021) |
 | **Dependencies** | Cart, Inventory, Payment, Promotion, User, Store |
 | **Forbidden Dependencies** | Delivery, Notification, Analytics, Search |
@@ -208,11 +208,11 @@ Public Services restate `module-catalog.md`'s Public Interfaces grouped into nam
 |---|---|
 | **Purpose** | Own settlement and refunds across every payment method. |
 | **Public Services** | PaymentService, RefundService |
-| **Internal Services** | GatewayIntegrationService — wraps the Moyasar integration (ADR-0022), never externally callable, never used by any other module |
-| **Application Services** | PaymentInitiationOrchestrationService, RefundOrchestrationService |
-| **Domain Services** | PaymentStateTransitionRules, RefundConstraintValidationRules (validates the price-snapshot/order-context constraints already established, not the business eligibility decision itself — `capability-boundary-map.md` §8's Open Decision) |
-| **Repositories** | PaymentRepository, PaymentHistoryRepository, RefundRepository, CashRemittanceRepository, CardOnDeliveryRepository |
-| **Published Events** | `PaymentAuthorized`, `PaymentCaptured`, `PaymentFailed`, `RefundIssued`, `RefundFailed`, `CashRemittanceRecorded` |
+| **Internal Services** | GatewayIntegrationService — wraps the Moyasar integration (ADR-0022), never externally callable, never used by any other module; LedgerRecordingService (ADR-0037) — records every financial movement on behalf of PaymentService/RefundService, never called externally, mirroring Inventory's own LedgerRecordingService shape |
+| **Application Services** | PaymentInitiationOrchestrationService, RefundOrchestrationService (now computing a per-line refund breakdown against Order's Price Snapshot — ADR-0038), DeliveryCollectionRecordingService (ADR-0035 — receives Order's forwarded `DeliveryCompletedWithPayment` handling, distinct from PaymentInitiationOrchestrationService since it never talks to Moyasar) |
+| **Domain Services** | PaymentStateTransitionRules, RefundConstraintValidationRules (validates the price-snapshot/order-context constraints already established, not the business eligibility decision itself — per ADR-0033, eligibility is Order's rule, executed by Payment once approved by Order or an authorized Support flow), RefundLineItemAllocationRules (ADR-0038 — proportional vs. full-line reversal against a promotion-adjusted Price Snapshot; never re-evaluates promotion eligibility itself) |
+| **Repositories** | PaymentRepository, PaymentHistoryRepository, RefundRepository, CashRemittanceRepository, CardOnDeliveryRepository, PaymentLedgerRepository (ADR-0037) |
+| **Published Events** | `PaymentAuthorized`, `PaymentCaptured`, `PaymentFailed`, `RefundIssued`, `RefundFailed`, `CashRemittanceRecorded`, `PaymentLedgerRecorded` (ADR-0037) |
 | **Consumed Events** | `OrderPlaced` (informational) |
 | **Transaction Boundaries** | Each payment or refund operation commits within one Payment-local transaction, over Payment's own five tables only |
 | **Dependencies** | Order |
@@ -238,16 +238,16 @@ Public Services restate `module-catalog.md`'s Public Interfaces grouped into nam
 
 | Field | Detail |
 |---|---|
-| **Purpose** | Own in-store picking and last-mile delivery. |
-| **Public Services** | PickingService, DeliveryAssignmentService |
+| **Purpose** | Own in-store picking, last-mile delivery, and — per ADR-0034 — grouping eligible deliveries into rider batches. |
+| **Public Services** | PickingService, DeliveryAssignmentService, DeliveryBatchingService (ADR-0034) |
 | **Internal Services** | None notable |
-| **Application Services** | PickingOrchestrationService, DeliveryOrchestrationService |
-| **Domain Services** | RiderAssignmentRules, DeliveryCompletionValidationRules |
-| **Repositories** | PickingSessionRepository, DeliveryAssignmentRepository, RiderLocationRepository |
-| **Published Events** | `PickingStarted`, `PickingCompleted`, `DeliveryAssigned`, `DeliveryCompleted`, `RiderLocationUpdated` |
+| **Application Services** | PickingOrchestrationService, DeliveryOrchestrationService, BatchFormationOrchestrationService (ADR-0034 — evaluates eligibility and forms a batch as one Delivery-local operation) |
+| **Domain Services** | RiderAssignmentRules, DeliveryCompletionValidationRules, BatchEligibilityRules (proximity/readiness-time/capacity/SLA checks against Settings-owned thresholds — ADR-0034), RouteSequencingRules (stop ordering within a batch; deliberately a pure rule with no routing-engine implementation committed, per ADR-0034's future-replacement note) |
+| **Repositories** | PickingSessionRepository, DeliveryAssignmentRepository, RiderLocationRepository, DeliveryBatchRepository, DeliveryStopRepository (ADR-0034) |
+| **Published Events** | `PickingStarted`, `PickingCompleted`, `DeliveryAssigned`, `DeliveryCompleted`, `RiderLocationUpdated`, `DeliveryFailed`, `DeliveryRejected` (ADR-0036), `DeliveryCompletedWithPayment` (ADR-0035), `DeliveryBatchCreated`, `DriverAssignedToBatch`, `BatchRouteUpdated`, `BatchCompleted`, `BatchCancelled` |
 | **Consumed Events** | `OrderReadyForFulfillment` |
-| **Transaction Boundaries** | Each picking or delivery-assignment operation commits within one Delivery-local transaction |
-| **Dependencies** | Order, User, Store |
+| **Transaction Boundaries** | Each picking, delivery-assignment, or batch-formation/update operation commits within one Delivery-local transaction, over Delivery's own tables only — batch formation never opens a transaction spanning Order, Payment, or Inventory's tables (ADR-0034; ADR-0021's rule applied identically) |
+| **Dependencies** | Order, User, Store, Settings (batching-eligibility thresholds) |
 | **Forbidden Dependencies** | Payment, Cart, Catalog, Promotion, Search |
 
 ### 8.12 Notification
@@ -309,7 +309,7 @@ Public Services restate `module-catalog.md`'s Public Interfaces grouped into nam
 | **Domain Services** | None — deliberately absent, consistent with Audit's Boundary of never interpreting or judging the actions it records (`module-catalog.md` §4.15) |
 | **Repositories** | AuditLogRepository |
 | **Published Events** | None |
-| **Consumed Events** | Every module's consequential actions reach Audit via direct call or consumed event — the exact mechanism per action is `integration-and-messaging.md`'s to settle (Section 5) |
+| **Consumed Events** | Every module's consequential actions reach Audit via direct call or consumed event, per `integration-and-messaging.md` Section 5: consumed event where one already exists for the underlying action, a direct synchronous `RecordAuditEntry` call otherwise |
 | **Transaction Boundaries** | Each audit entry is recorded within its own Audit-local transaction, independent of the transaction of the action being recorded |
 | **Dependencies** | None |
 | **Forbidden Dependencies** | Every other module |
@@ -356,20 +356,20 @@ Rows are the calling module ("From"); columns are the called module ("To"). **A*
 
 | From \ To | Auth | User | Store | Catalog | Search | Inventory | Cart | Order | Payment | Promotion | Delivery | Notification | Support | Analytics | Audit | Settings |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **Auth** | – | N | N | F | N | F | F | F | F | F | F | A | N | N | N | N |
+| **Auth** | – | N | N | F | N | F | F | F | F | F | F | A | N | N | N | A |
 | **User** | A | – | N | F | N | F | F | F | F | F | F | N | N | N | N | N |
-| **Store** | F | F | – | F | F | F | F | F | F | F | F | F | F | F | F | F |
+| **Store** | F | F | – | F | F | F | F | F | F | F | F | F | F | F | F | A |
 | **Catalog** | N | N | A | – | N | F | F | F | F | F | F | N | N | N | N | N |
 | **Search** | N | F | N | A | – | A | F | F | F | F | F | N | N | N | N | N |
-| **Inventory** | N | N | A | A | N | – | F | F | F | F | F | N | N | N | N | N |
+| **Inventory** | N | N | A | A | N | – | F | F | F | F | F | N | N | N | N | A |
 | **Cart** | N | A | N | A | N | F | – | F | F | N | F | N | N | N | N | N |
-| **Order** | N | A | A | N | F | A | A | – | A | A | F | F | N | F | N | N |
-| **Payment** | N | N | N | F | F | F | F | A | – | F | F | N | N | N | N | N |
-| **Promotion** | N | A | N | A | N | F | F | F | F | – | F | N | N | N | N | N |
-| **Delivery** | N | A | A | F | F | N | N | A | F | F | – | N | N | N | N | N |
-| **Notification** | N | N | N | F | N | F | F | F | F | F | F | – | N | N | N | N |
+| **Order** | N | A | A | N | F | A | A | – | A | A | F | F | N | F | N | A |
+| **Payment** | N | N | N | F | F | F | F | A | – | F | F | N | N | N | N | A |
+| **Promotion** | N | A | N | A | N | F | F | F | F | – | F | N | N | N | N | A |
+| **Delivery** | N | A | A | F | F | N | N | A | F | F | – | N | N | N | N | A |
+| **Notification** | N | N | N | F | N | F | F | F | F | F | F | – | N | N | N | A |
 | **Support** | N | A | N | F | F | F | F | A | A | F | A | N | – | N | N | N |
-| **Analytics** | N | N | N | N | N | F | F | F | F | N | F | N | N | – | N | N |
+| **Analytics** | N | N | N | N | N | F | F | F | F | N | F | N | N | – | N | A |
 | **Audit** | F | F | F | F | F | F | F | F | F | F | F | F | F | F | – | F |
 | **Settings** | F | F | F | F | F | F | F | F | F | F | F | F | F | F | F | – |
 
@@ -388,4 +388,5 @@ None of these candidates changes this document's Public Services, Dependencies, 
 
 - The internal Application/Domain/Internal Service names in Section 8 are this document's own conceptual labels, consistent with `coding-standards.md` Section 3's layering but not previously named anywhere — a future SDD for any module may refine or rename them without that being an architectural change, as long as the module's Public Services, Dependencies, and Forbidden Dependencies remain exactly as `module-catalog.md` and this document state them.
 - Whether Search and Analytics require any transactional guarantee at all around their own derived-data writes (Sections 8.5, 8.14) is left to their eventual SDDs — this document states they are not authoritative and therefore not held to the same transaction-ownership rigor as the other fourteen modules, but does not prescribe a specific mechanism.
-- The three Open Decisions already carried through `module-catalog.md`, `capability-boundary-map.md`, and `data-ownership-map.md` (Settings' undeclared dependents, refund eligibility's exact decision owner, Auth's session/token storage mechanism) are unaffected by this document and remain open at the same status.
+- The Open Decisions previously carried through `module-catalog.md`, `capability-boundary-map.md`, and `data-ownership-map.md` (Settings' dependents, refund eligibility's decision owner, Auth's session/token storage mechanism) are resolved by ADR-0033 and must not be treated as open going forward.
+- The internal service names introduced here for ADR-0035–0041 (`DeliveryCollectionRecordingService`, `LedgerRecordingService`, `RefundLineItemAllocationRules`, `StepUpAuthenticationService`, `StoreScopeEvaluationRules`, and related) are, like every other name in Section 8, this document's own conceptual labels — a future SDD may refine or rename them without that being an architectural change, as long as each module's Public Services, Dependencies, and Forbidden Dependencies remain exactly as `module-catalog.md` and this document state them.

@@ -49,9 +49,9 @@ Each entry below summarizes `module-catalog.md`'s technical detail (Public Inter
 
 **Explicit Non-Responsibilities:** Does not decide what an authenticated actor is allowed to *do* (that's the RBAC/permission model, evaluated centrally but not owned by Auth as a business capability — `04-cross-cutting/security-and-compliance.md`). Does not hold a person's name, address, or work schedule (User's capability). Does not send SMS itself (Notification's capability, via Unifonic — ADR-0023).
 
-**Owned Business Processes:** Account Login (OTP request/verify), Session Renewal, Session/Account Revocation.
+**Owned Business Processes:** Account Login (OTP request/verify), Session Renewal, Session/Account Revocation, Step-Up Authentication (ADR-0040, for the four privileged roles before a high-risk operation), Store Scope Assignment (ADR-0041, which stores an operational user is authorized to act against).
 
-**Business Events it Owns:** A login was completed (`UserAuthenticated`); an OTP was requested (`OtpRequested`); a session was revoked (`SessionRevoked`).
+**Business Events it Owns:** A login was completed (`UserAuthenticated`); an OTP was requested (`OtpRequested`); a session was revoked (`SessionRevoked`); a step-up challenge was completed or failed (`StepUpAuthenticationCompleted`, `StepUpAuthenticationFailed` — ADR-0040).
 
 **Public Interfaces:** See `module-catalog.md` §4.1 — RequestOtp, VerifyOtp, IssueTokenPair, RefreshAccessToken, RevokeSession, ValidateToken.
 
@@ -255,7 +255,7 @@ Each entry below summarizes `module-catalog.md`'s technical detail (Public Inter
 
 **Downstream Dependencies:** Payment (Order is the only caller of `InitiatePayment`), Delivery (acts once Order signals fulfillment-readiness), Support (references order context for tickets).
 
-**Collaboration with Other Modules:** Order is the system's primary orchestrator — per ADR-0021, each step it takes against another capability is that capability's own module-local transaction, with Order performing an explicit compensating action (such as cancelling a pending order) if a later step fails, rather than any single transaction spanning capabilities.
+**Collaboration with Other Modules:** Order is the system's primary orchestrator — per ADR-0021, each step it takes against another capability is that capability's own module-local transaction, with Order performing an explicit compensating action (such as cancelling a pending order) if a later step fails, rather than any single transaction spanning capabilities. Per ADR-0035/ADR-0036, Order also acts as the forwarding point for two Delivery-originated facts it does not itself own: a delivery-collected payment (forwarded to Payment's interface) and a failed delivery (advancing Order's own state machine) — in both cases Order reacts to a Delivery event and acts through the owning capability's interface, never by writing to Delivery's or Payment's data directly.
 
 **Forbidden Responsibilities:** Deciding stock availability, executing a payment, assigning a rider, or resolving a support dispute — Order coordinates these outcomes, it does not perform them.
 
@@ -271,11 +271,11 @@ Each entry below summarizes `module-catalog.md`'s technical detail (Public Inter
 
 **Responsibilities:** Settlement across mada, card, Apple Pay, and BNPL via Moyasar (ADR-0022), plus cash-on-delivery and card-on-delivery collection; refund processing (ADR-0020).
 
-**Explicit Non-Responsibilities:** Does not decide whether an order is *eligible* for a refund on business grounds — Payment executes and records a refund once eligibility is established elsewhere (see Section 8's Open Decision on exactly where that eligibility decision is made). Does not initiate itself — it acts only when Order calls it as a checkout step.
+**Explicit Non-Responsibilities:** Does not decide whether an order is *eligible* for a refund on business grounds. Per ADR-0033, Order owns automatic refund-eligibility rules from order state, cancellation reason, delivery failure, and substitution outcome; Support may initiate a refund request with a reason; Payment executes and records a refund once eligibility is approved by Order or an authorized Support approval flow. Does not initiate itself — it acts only when Order calls it as a checkout step.
 
-**Owned Business Processes:** Payment Authorization & Capture, Cash/Card-on-Delivery Collection & Reconciliation, Refund Processing.
+**Owned Business Processes:** Payment Authorization & Capture, Cash/Card-on-Delivery Collection & Reconciliation, Refund Processing, Financial Ledger Recording (ADR-0037 — every financial movement, including delivery-collected payments and line-item refunds, produces an immutable ledger entry).
 
-**Business Events it Owns:** A payment was authorized, captured, or failed (`PaymentAuthorized`, `PaymentCaptured`, `PaymentFailed`); a refund was issued or failed (`RefundIssued`, `RefundFailed`); cash was remitted (`CashRemittanceRecorded`).
+**Business Events it Owns:** A payment was authorized, captured, or failed (`PaymentAuthorized`, `PaymentCaptured`, `PaymentFailed`); a refund was issued or failed (`RefundIssued`, `RefundFailed`); cash was remitted (`CashRemittanceRecorded`); a ledger entry was recorded (`PaymentLedgerRecorded`, ADR-0037).
 
 **Public Interfaces:** See `module-catalog.md` §4.9 — InitiatePayment, ConfirmPayment, RecordCashCollection, RecordCardOnDeliveryCollection, IssueRefund, GetPaymentStatus.
 
@@ -283,11 +283,11 @@ Each entry below summarizes `module-catalog.md`'s technical detail (Public Inter
 
 **Downstream Dependencies:** Support (may trigger `IssueRefund` on a customer's behalf during a support workflow).
 
-**Collaboration with Other Modules:** Payment is the Backend's sole caller of the external Moyasar gateway (ADR-0022, `02-context/system-context.md`) — no client, and no other module, ever calls Moyasar directly or holds its credentials.
+**Collaboration with Other Modules:** Payment is the Backend's sole caller of the external Moyasar gateway (ADR-0022, `02-context/system-context.md`) — no client, and no other module, ever calls Moyasar directly or holds its credentials. Per ADR-0035, Delivery never calls Payment even for a delivery-collected cash/card-on-delivery payment — Order consumes Delivery's `DeliveryCompletedWithPayment` event and forwards the collection to Payment's existing interface, so Payment's own upstream caller set (Order, Support) is unchanged.
 
 **Forbidden Responsibilities:** Deciding whether a refund is warranted as a business matter, changing order state directly, or being called by any capability other than Order or Support.
 
-**Future Expansion Opportunities:** Terminal/POS settlement integration for card-on-delivery reconciliation remains an explicitly unresolved "Phase 1 spike" (`module-catalog.md` §4.9) — when resolved, it extends this same capability, not a new one.
+**Future Expansion Opportunities:** Per ADR-0032/ADR-0033, MVP launch uses Payment-owned manual POS/card-on-delivery settlement reconciliation; a terminal/POS provider settlement API integration (`module-catalog.md` §4.9) extends this same capability once the terminal provider is confirmed — an enhancement, not a new capability.
 
 ---
 
@@ -325,15 +325,15 @@ Each entry below summarizes `module-catalog.md`'s technical detail (Public Inter
 
 **Business Capability:** Fulfillment (Picking & Delivery).
 
-**Responsibilities:** In-store picking (ADR-0020); rider assignment and delivery execution; rider location tracking during active delivery.
+**Responsibilities:** In-store picking (ADR-0020); rider assignment and delivery execution; rider location tracking during active delivery; grouping up to two (MVP) eligible, same-store deliveries into one rider trip — delivery batching (ADR-0034), a purely operational optimization within this same capability, not a new one.
 
-**Explicit Non-Responsibilities:** Does not own the order itself — it acts once Order signals fulfillment-readiness and reports back via events, never by writing to Order's own records. Does not own worker profile or shift data — it reads eligibility signals from User's capability rather than duplicating them.
+**Explicit Non-Responsibilities:** Does not own the order itself — it acts once Order signals fulfillment-readiness and reports back via events, never by writing to Order's own records. Does not own worker profile or shift data — it reads eligibility signals from User's capability rather than duplicating them. Batching does not change any of this: a Delivery Batch groups Delivery's own Delivery Assignments only — it is never a second owner of order, payment, or inventory state, and grants Delivery no new authority over anything outside its existing boundary. Does not decide batching eligibility from hardcoded values — thresholds (proximity, readiness-time tolerance, capacity, SLA headroom) are Settings-owned configuration (ADR-0034), evaluated by Delivery, not invented ad hoc.
 
-**Owned Business Processes:** Picking, Rider Assignment, Delivery Execution.
+**Owned Business Processes:** Picking, Rider Assignment, Delivery Execution, Delivery Batching (ADR-0034).
 
-**Business Events it Owns:** Picking started or completed (`PickingStarted`, `PickingCompleted`); a rider was assigned or completed a delivery (`DeliveryAssigned`, `DeliveryCompleted`); a rider's location updated (`RiderLocationUpdated`).
+**Business Events it Owns:** Picking started or completed (`PickingStarted`, `PickingCompleted`); a rider was assigned, completed, or failed to complete a delivery, or rejected an offered one (`DeliveryAssigned`, `DeliveryCompleted`, `DeliveryFailed`, `DeliveryRejected` — the last two per ADR-0036); a delivery completed with a cash/card-on-delivery collection (`DeliveryCompletedWithPayment`, ADR-0035 — a fact Delivery announces but never records financially itself); a rider's location updated (`RiderLocationUpdated`); a batch was created, assigned, re-routed, completed, or cancelled (`DeliveryBatchCreated`, `DriverAssignedToBatch`, `BatchRouteUpdated`, `BatchCompleted`, `BatchCancelled` — ADR-0034).
 
-**Public Interfaces:** See `module-catalog.md` §4.11 — StartPickingSession, CompletePickingSession, AssignRider, RecordRiderLocation, CompleteDelivery, GetActiveAssignmentForRider.
+**Public Interfaces:** See `module-catalog.md` §4.11 — StartPickingSession, CompletePickingSession, AssignRider, RecordRiderLocation, CompleteDelivery, GetActiveAssignmentForRider, EvaluateBatchEligibility, CreateDeliveryBatch, AssignBatchToRider, RecalculateBatchRoute, GetActiveBatchForRider.
 
 **Upstream Dependencies:** Order (fulfillment-readiness signal and completion reporting), User (eligible pickers/riders), Store (scope).
 
@@ -477,7 +477,7 @@ Each entry below summarizes `module-catalog.md`'s technical detail (Public Inter
 
 **Upstream Dependencies:** None.
 
-**Downstream Dependencies:** Not explicitly enumerated by any module's Dependencies field in `module-catalog.md` — see Section 8's Open Decision.
+**Downstream Dependencies:** Per ADR-0033, Auth, Notification, Order, Payment, Delivery, Inventory, Promotion, Store, and Analytics read configuration from Settings (`module-catalog.md` §4.16's Readers field); Settings itself depends on none of them.
 
 **Collaboration with Other Modules:** Settings is queried, never directed — it has no awareness of who reads a given configuration value or why.
 
@@ -515,7 +515,7 @@ A new business capability (and the module that would own it) is added only when 
 
 ## 8. Open Decisions
 
-- **Refund eligibility's exact decision owner.** `module-catalog.md` §4.9 states that refund eligibility "on business grounds" is evaluated by "Order/support process" before Payment executes it, but no document states definitively whether Order's own logic, Support's human-driven workflow, or both are legitimate initiators of that eligibility decision. This document treats both as plausible (Section 4.9, 4.13) but flags the ambiguity rather than asserting a single owner not stated elsewhere.
-- **Settings' downstream dependents are not enumerated anywhere.** No module's Dependencies field in `module-catalog.md` names Settings, even though multiple capabilities plausibly read configuration values from it (rate limits, delivery radii defaults, promotion caps). This document does not invent those relationships — it notes the gap for `data-ownership-map.md` or a future revision of `module-catalog.md` to close.
 - **Audit and Auth's cross-cutting call pattern is acknowledged but not formally modeled.** Both `module-catalog.md` entries describe being "universally called" without listing every calling module explicitly. This document follows that same treatment rather than inventing a full enumeration neither source document provides.
 - **Loyalty, marketplace, and multi-country expansion** (referenced under several modules' Future Expansion Opportunities) are named as plausible future capability boundaries but are explicitly not decided here — each would require its own ADR under Section 7's process before this document is updated to include it.
+- Refund eligibility's decision owner and Settings' downstream dependents — previously open here — are resolved by ADR-0033 (Sections above, and `module-catalog.md` §4.9, §4.16) and must not be treated as open going forward.
+- The delivery-collected-payment path, failed/rejected delivery events, the Payment Ledger, line-item refunds, OTP abuse protection, step-up authentication, and store-scoped authorization — all identified as gaps by the 2026-07-30 Architecture Readiness Review — are resolved by ADR-0035 through ADR-0041 respectively and must not be treated as open going forward.

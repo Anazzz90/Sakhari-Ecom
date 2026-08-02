@@ -25,18 +25,19 @@ Production consists of one Backend deployable (the modular monolith, ADR-0002) r
 
 | Component | Role | Grounded in |
 |---|---|---|
-| Backend compute | Runs the single NestJS modular-monolith deployable | ADR-0002; `04-cross-cutting/technology-decisions.md` Section 4 |
-| PostgreSQL (RDS) | System of record | ADR-0003 |
-| Redis | Cache, sessions, rate limiting, short-lived coordination | ADR-0004 |
+| Backend compute | Runs the single NestJS modular-monolith deployable, as an AWS ECS Fargate service behind an Application Load Balancer | ADR-0002, ADR-0030; `04-cross-cutting/technology-decisions.md` Section 4 |
+| PostgreSQL (RDS) | System of record, Multi-AZ in Production | ADR-0003, ADR-0030 |
+| Redis | Cache, sessions, rate limiting, short-lived coordination, via managed ElastiCache | ADR-0004, ADR-0030 |
 | S3 (Object Storage) | Product imagery and file/media assets | ADR-0016 |
-| CDN | Edge delivery for public, cacheable content | `04-cross-cutting/technology-decisions.md` Section 11 |
-| Cloud Infrastructure Provider | Managed hosting substrate for all of the above, Saudi-compliant region | `04-cross-cutting/technology-decisions.md` Section 10 |
+| CDN | Edge delivery for public, cacheable content, via CloudFront | `04-cross-cutting/technology-decisions.md` Section 11; ADR-0030 |
+| Cloud Infrastructure Provider | Managed hosting substrate for all of the above, Saudi-compliant region (AWS `me-central-2`) | `04-cross-cutting/technology-decisions.md` Section 10; ADR-0024 |
+| Secrets store | AWS Secrets Manager for production secrets | ADR-0030 |
 
-**What's deliberately not named here:** the specific compute service (a managed container platform, a managed application-hosting service, or otherwise) hosting the Backend deployable is not decided in any prior document — this document describes it functionally ("a managed compute service running the Backend as a single deployable unit") rather than naming a specific AWS service, per this task's instruction to stay abstract where no decision exists. See Open Decisions (Section 12).
+Per ADR-0030, the Backend deployable runs as an ECS Fargate service — a managed container platform, not a self-managed EC2/Kubernetes cluster — chosen so a solo operator is not also managing servers or a Kubernetes control plane.
 
 ## 4. Networking
 
-Kept abstract, consistent with this task's instruction, because no prior document defines specific network topology: Production networking separates a public-facing entry point (the versioned REST API and the CDN) from the data stores, which are reachable only from the Backend compute layer — never directly from the public internet, and never directly from a client (`02-context/system-context.md` Section 6's "Infrastructure is reachable only from the Backend" rule, restated here as a networking-level requirement, not just an application-level one). Specific network topology (VPC/subnet design, security-group rules, exact ingress/egress paths) is not decided in any prior document and is named in Open Decisions.
+Per ADR-0030: a VPC separates public subnets (the ALB and CloudFront's edge) from private subnets (ECS tasks, RDS, and Redis) — the data stores and the Backend compute layer are never reachable directly from the public internet or a client, consistent with `02-context/system-context.md` Section 6's "Infrastructure is reachable only from the Backend" rule, now expressed as a networking-level requirement, not just an application-level one. Exact security-group rules and subnet CIDR allocation remain SDD/infrastructure-as-code-level detail, not architecture-level decisions.
 
 ## 5. Storage
 
@@ -59,18 +60,26 @@ At the architecture level, Production is monitored for: the Backend's health and
 
 ## 9. Backup
 
-PostgreSQL (RDS) uses automated, managed backups with point-in-time recovery, consistent with the operational-simplicity design goal (Constitution Section 5) that motivated choosing a managed database in the first place (ADR-0003). S3 relies on the durability guarantees of the managed object storage service itself (ADR-0016) rather than a separate, custom backup process. **Exact backup retention windows and point-in-time-recovery granularity are not decided in any prior document** and are named in Open Decisions — this document establishes the mechanism (managed, automated backups), not the specific retention parameters.
+PostgreSQL (RDS) uses automated, managed backups with point-in-time recovery, consistent with the operational-simplicity design goal (Constitution Section 5) that motivated choosing a managed database in the first place (ADR-0003). Per ADR-0030/ADR-0031: Production backup retention is **35 days**, with point-in-time recovery enabled throughout that window. S3 relies on the durability guarantees of the managed object storage service itself (ADR-0016) rather than a separate, custom backup process. Restore verification is exercised **monthly** during launch stabilization and **quarterly** once operations are stable (ADR-0030, ADR-0031) — an unverified backup is not treated as a real backup.
 
 ## 10. Disaster Recovery
 
-This is the infrastructure-level counterpart to `data-architecture.md` Section 14's data-level recovery mechanisms (compensating actions, reconciliation jobs, the ledger/audit trail) — that document explicitly deferred recovery-point/recovery-time objectives (RPO/RTO) and restore procedures to this one. The framework, without inventing specific numbers not yet decided anywhere:
+This is the infrastructure-level counterpart to `data-architecture.md` Section 14's data-level recovery mechanisms (compensating actions, reconciliation jobs, the ledger/audit trail). Per ADR-0031, the launch RPO/RTO targets are:
 
-- **Recovery approach:** restore PostgreSQL from its managed, automated backup (Section 9) to the most recent recoverable point; S3 relies on the object storage service's own durability rather than a restore procedure. A single-region deployment (appropriate at current scale, Constitution Section 6/13) is made safe by disciplined backup practice rather than multi-region redundancy the business does not yet need — `01-Architecture-Design-Specification.md` Section 14's own framing, restated here as the operative approach.
-- **What is explicitly not decided here:** specific RPO/RTO targets (how much data loss and downtime is acceptable), the exact restore drill cadence, and whether a specific disaster scenario (regional outage) is in scope at current launch scale. These are named in Open Decisions rather than assumed, because asserting a specific number here without a documented basis for it would be exactly the kind of invented decision this task's own rules forbid.
+| Data class | RPO | RTO |
+|---|---|---|
+| PostgreSQL transactional core / audit / ledger | <= 5 minutes | Database restore <= 4 hours |
+| Backend service (compute) | Not applicable (stateless) | Service restore <= 60 minutes |
+| Derived/rebuildable (Search index, Analytics rollups) | Not applicable — regenerated from source events | Regeneration time, not a restore time |
+| Redis (cache/session) | Not meaningful by design | Not meaningful by design |
+
+- **Recovery approach:** restore PostgreSQL from its managed, automated backup (Section 9) to the most recent recoverable point within the 5-minute RPO; S3 relies on the object storage service's own durability rather than a restore procedure. A single-region deployment (appropriate at current scale, Constitution Section 6/13) is made safe by disciplined backup practice rather than multi-region redundancy the business does not yet need — `01-Architecture-Design-Specification.md` Section 14's own framing, restated here as the operative approach.
+- **Restore drill cadence:** monthly until stable production launch, quarterly afterward (ADR-0030, ADR-0031), matching Section 9's backup-verification cadence.
+- **Multi-region scope:** explicitly out of scope for MVP launch — a single-region deployment is the accepted trade-off (Section 13); multi-region is reconsidered only under sustained, evidenced regional-outage pressure, per ADR-0031's Future Reconsideration Conditions.
 
 ## 11. CI/CD
 
-Code moves through the promotion path `environment-strategy.md` Section 4 establishes (Development ? Staging ? Production, no environment skipped) via an automated pipeline with, at minimum, these stages: automated tests run on every change; a build step produces the deployable artifact; the artifact deploys to Staging; and only after Staging verification does the same artifact promote to Production — the same built artifact, not a separate Production-specific build, so what was verified in Staging is exactly what reaches Production. **The specific CI/CD platform/tool is not decided in any prior document** and is named in Open Decisions; this document establishes the required stages, not the tool that runs them.
+Code moves through the promotion path `environment-strategy.md` Section 4 establishes (Development ? Staging ? Production, no environment skipped) via an automated pipeline with, at minimum, these stages: automated tests run on every change; a build step produces the deployable artifact; the artifact deploys to Staging; and only after Staging verification does the same artifact promote to Production — the same built artifact, not a separate Production-specific build, so what was verified in Staging is exactly what reaches Production. Per ADR-0030, **GitHub Actions** is the CI/CD platform, matching the project's existing GitHub-based workflow.
 
 **Release strategy:** deployments are released as a single Backend artifact per ADR-0002's one-deployable model. Rollback is a redeploy of the previous artifact version — made safer than it would otherwise be by ADR-0017's versioned API discipline, since a rolled-back Backend version continues serving whichever API version clients already depend on, rather than clients being stranded mid-release the way an unversioned API would risk.
 
@@ -86,10 +95,7 @@ At the infrastructure level: the Backend, being a single deployable (ADR-0002), 
 
 ## 14. Open Decisions
 
-- **Specific compute service** hosting the Backend deployable (Section 3) — not named in any prior document.
-- **Specific network topology** — VPC/subnet design, security-group rules (Section 4).
-- **Exact backup retention window and point-in-time-recovery granularity** (Section 9).
-- **RPO/RTO targets, restore drill cadence, and multi-region scope** (Section 10) — deliberately not asserted without a documented basis.
-- **Specific CI/CD platform/tool** (Section 11) — the pipeline stages are established; the tool that runs them is not.
-- **Monitoring/alerting tool choice and alert-triage philosophy** — named here as existing but detailed ownership belongs to `04-cross-cutting/observability-and-operations.md`, not yet authored.
+- **Exact VPC/subnet CIDR allocation and security-group rules** (Section 4) remain infrastructure-as-code-level detail, within the topology ADR-0030 establishes.
+- **Monitoring/alerting tool choice and alert-triage philosophy** — detailed ownership belongs to `04-cross-cutting/observability-and-operations.md`.
+- Compute service, network topology, backup retention, RPO/RTO targets, restore cadence, and CI/CD platform — previously open here — are resolved by ADR-0030 and ADR-0031 (Sections 3, 4, 9–11 above) and must not be treated as open going forward.
 

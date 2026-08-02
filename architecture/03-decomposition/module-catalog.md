@@ -20,7 +20,7 @@
 
 **Intended audience.** Anyone extending, reviewing, or reasoning about the backend: the project owner, an AI coding assistant generating or reviewing code against a specific module, and the author of any future Software Design Document (SDD) for a given module. A future SDD for a module should treat that module's entry here as its starting boundary, not something it renegotiates.
 
-**Cross-references.** This document realizes `01-Architecture-Design-Specification.md` Section 10 (Module Overview) and Section 7 (High-Level Architecture) at full granularity, and is built on `decisions/README.md`'s ADR-0002 (Modular Monolith), ADR-0009 (Module Ownership and No Cross-Module Repository Access), ADR-0010 (Transactional Checkout and Inventory Reservation), and ADR-0011 (Event-Driven Asynchronous Side Effects). It draws its entity-ownership grounding from the DDD's Entity Catalog (Section 4) and Transaction Boundaries (Section 9), reconciled where the two disagree — see Section 3.
+**Cross-references.** This document realizes `01-Architecture-Design-Specification.md` Section 10 (Module Overview) and Section 7 (High-Level Architecture) at full granularity, and is built on `decisions/README.md`'s ADR-0002 (Modular Monolith), ADR-0009 (Module Ownership and No Cross-Module Repository Access), ADR-0010 (Transactional Checkout and Inventory Reservation, clarified by ADR-0021), ADR-0011 (Event-Driven Asynchronous Side Effects, made durable by ADR-0029's transactional outbox), ADR-0033 (Security and Business-Rule Closure, for refund eligibility, Settings readers, and POS/card-on-delivery ownership), ADR-0034 (Delivery Batching, resolving DDD Section 17.4), and ADR-0035–0041 (the delivery-collected-payment event, delivery failure/rejection events, the Payment Ledger, line-item-aware refunds, OTP abuse protection, step-up authentication, and store-scoped RBAC). It draws its entity-ownership grounding from the DDD's Entity Catalog (Section 4) and Transaction Boundaries (Section 9), reconciled where the two disagree — see Section 3.
 
 ---
 
@@ -31,7 +31,7 @@ Every module below is documented with the same ten fields, in the same order:
 - **Responsibilities** — what the module does, in business terms.
 - **Boundaries** — what the module explicitly does *not* do, and where its edge sits relative to its nearest neighbors.
 - **Ownership** — the DDD entities this module is the source of truth for (Principle 4.5).
-- **Public Interfaces** — the named operations other modules and the API layer may invoke. Every module is reached only through its public interface, never through a direct data access (ADR-0009). All are exposed externally via REST (per the confirmed REST API decision) through thin controllers (Principle 4.7); the same operations are what an internal caller uses for synchronous, transactional cross-module calls (ADR-0010).
+- **Public Interfaces** — the named operations other modules and the API layer may invoke. Every module is reached only through its public interface, never through a direct data access (ADR-0009). All are exposed externally via REST (per the confirmed REST API decision) through thin controllers (Principle 4.7); the same operations are what an internal caller uses for synchronous cross-module calls, each executing within the calling and called module's own transaction — never a transaction spanning both (ADR-0010, clarified by ADR-0021).
 - **Dependencies** — which other modules this module is allowed to call synchronously, and why.
 - **Forbidden Dependencies** — which modules this module must never call, to prevent circular dependencies and to keep the dependency graph flowing in one direction. The full graph and its enforcement is `03-decomposition/module-communication.md`'s subject; each entry here states only this module's own rule.
 - **Published Events** — domain events this module raises for others to consume asynchronously (ADR-0011), following the `<Entity><PastTenseVerb>` naming convention used consistently across this catalog (e.g. `OrderPlaced`); full event architecture is `04-cross-cutting/integration-and-messaging.md`'s subject.
@@ -65,19 +65,19 @@ ADR-0020 resolves the mismatch earlier drafts flagged between the DDD's entity-o
 
 **Boundaries:** Does not own actor profile data (name, address, worker capability) — that is User's job. Does not decide *what* an authenticated actor is allowed to do beyond proving identity and carrying role/permission claims for RBAC to evaluate — permission logic itself belongs to the security model documented in `04-cross-cutting/security-and-compliance.md`, evaluated centrally but not "owned" by any single business module. Does not send the OTP SMS itself — it requests delivery through Notification, which owns the actual SMS/OTP provider integration named in `02-context/system-context.md`.
 
-**Ownership:** The DDD's User entity (Section 5.1) — the core identity/credential record — plus session and refresh-token state, which are Auth-internal and not separately named in the DDD.
+**Ownership:** The DDD's User entity (Section 5.1) — the core identity/credential record — plus session, refresh-token, and Store Scope Assignment state, all Auth-internal and not separately named in the DDD (per ADR-0041, Store Scope Assignment follows the same Auth-internal treatment already established for Session/Refresh Token).
 
-**Public Interfaces:** RequestOtp, VerifyOtp, IssueTokenPair, RefreshAccessToken, RevokeSession, ValidateToken (used internally by every other module's request-handling path, not called by clients directly).
+**Public Interfaces:** RequestOtp, VerifyOtp, IssueTokenPair, RefreshAccessToken, RevokeSession, ValidateToken (used internally by every other module's request-handling path, not called by clients directly; returns identity, role/permission claims, and — per ADR-0041 — the caller's Assigned Stores for Resource Scope evaluation), InitiateStepUpChallenge, VerifyStepUpChallenge (per ADR-0040, for the four privileged roles performing a high-risk operation).
 
-**Dependencies:** Notification (to request OTP delivery — Auth never talks to the SMS/OTP provider directly, consistent with `02-context/system-context.md`'s rule that external systems are reached only through their owning module).
+**Dependencies:** Notification (to request OTP delivery — Auth never talks to the SMS/OTP provider directly, consistent with `02-context/system-context.md`'s rule that external systems are reached only through their owning module), Settings (read-only, for cross-cutting configuration — ADR-0033, including OTP abuse-protection thresholds per ADR-0039).
 
 **Forbidden Dependencies:** Every business-facing module (Order, Payment, Cart, Catalog, Inventory, Delivery, Promotion). Auth sits at the foundation of the dependency graph; nothing about identity or session state should ever require knowing anything about a business capability.
 
-**Published Events:** `UserAuthenticated`, `OtpRequested`, `SessionRevoked`.
+**Published Events:** `UserAuthenticated`, `OtpRequested`, `SessionRevoked`, `StepUpAuthenticationCompleted`, `StepUpAuthenticationFailed` (per ADR-0040, both within audit scope).
 
 **Consumed Events:** None. Auth is a foundational module other modules depend on; it does not react to business events.
 
-**Data Ownership:** User (identity/credential record), Session, Refresh Token.
+**Data Ownership:** User (identity/credential record), Session, Refresh Token, Store Scope Assignment (ADR-0041).
 
 **Future Expansion:** The most likely candidate for early independent-service extraction (Constitution Section 13) precisely because it is already the most self-contained module — every other module depends on it, it depends on almost nothing. Extraction would change nothing about its business logic, only its deployment boundary (ADR-0002's designed reversibility).
 
@@ -117,7 +117,7 @@ ADR-0020 resolves the mismatch earlier drafts flagged between the DDD's entity-o
 
 **Public Interfaces:** GetStore, ListActiveStores, ResolveServingStoreForAddress, GetServiceZone.
 
-**Dependencies:** None. Store is one of the most foundational modules in the system.
+**Dependencies:** Settings (read-only, for cross-cutting configuration — ADR-0033). Otherwise none — Store is one of the most foundational modules in the system.
 
 **Forbidden Dependencies:** Every other module. Store must be resolvable without knowing about catalog, inventory, orders, or any operational state — everything else scopes itself to Store, not the reverse.
 
@@ -189,7 +189,7 @@ ADR-0020 resolves the mismatch earlier drafts flagged between the DDD's entity-o
 
 **Public Interfaces:** GetAvailability, ReserveStock, ReleaseReservation, ConfirmReservationConsumption (used at packing completion, DDD Section 9.4), RecordLedgerAdjustment.
 
-**Dependencies:** Store (to scope stock to the correct store), Catalog (to validate a referenced product exists and is active).
+**Dependencies:** Store (to scope stock to the correct store), Catalog (to validate a referenced product exists and is active), Settings (read-only, for cross-cutting configuration — ADR-0033).
 
 **Forbidden Dependencies:** Order, Cart, Payment, Delivery, Promotion. Inventory must be callable without knowing anything about the order, cart, or payment that triggered a reservation — it receives a request to reserve a quantity for a reference, not a dependency on Order's internal state.
 
@@ -237,13 +237,13 @@ ADR-0020 resolves the mismatch earlier drafts flagged between the DDD's entity-o
 
 **Public Interfaces:** PlaceOrder, GetOrder, ListOrdersForCustomer, CancelOrder, GetOrderEvents, RecordOrderEvent.
 
-**Dependencies:** Cart (to read the customer's selection at checkout time), Inventory (to reserve stock as the step immediately following order-record creation), Payment (to initiate/confirm payment), Promotion (to apply eligible promotions and record usage), User (to resolve the ordering customer and delivery address), Store (to resolve the serving store).
+**Dependencies:** Cart (to read the customer's selection at checkout time), Inventory (to reserve stock as the step immediately following order-record creation), Payment (to initiate/confirm payment), Promotion (to apply eligible promotions and record usage), User (to resolve the ordering customer and delivery address), Store (to resolve the serving store), Settings (read-only, for cross-cutting configuration — ADR-0033).
 
 **Forbidden Dependencies:** Delivery, Notification, Analytics, Search. Order must never require a synchronous response from any of these to complete a checkout — their involvement is entirely downstream and asynchronous (ADR-0011), consistent with Principle 4.1's correctness-over-latency ordering: checkout's correctness depends on Inventory and Payment responding synchronously, and on nothing else.
 
 **Published Events:** `OrderPlaced`, `OrderCancelled`, `OrderStatusChanged`, `OrderReadyForFulfillment`.
 
-**Consumed Events:** `PaymentAuthorized`, `PaymentFailed`, `PaymentCaptured` (from Payment), `InventoryReservationFailed` (from Inventory, to trigger the rollback/no-confirmed-order-remains expectation the DDD names in Section 9.1), `PickingCompleted`, `DeliveryCompleted` (from Delivery, to advance order status).
+**Consumed Events:** `PaymentAuthorized`, `PaymentFailed`, `PaymentCaptured` (from Payment), `InventoryReservationFailed` (from Inventory, to trigger the rollback/no-confirmed-order-remains expectation the DDD names in Section 9.1), `PickingCompleted`, `DeliveryCompleted` (from Delivery, to advance order status), `DeliveryFailed` (per ADR-0036, to advance Order to the SRD's "Failed Delivery" state — Order does not consume `DeliveryRejected`, which is Delivery's own internal reassignment concern), `DeliveryCompletedWithPayment` (per ADR-0035 — Order validates order state and forwards the collection to Payment's `RecordCashCollection`/`RecordCardOnDeliveryCollection` interface; Order does not record the payment itself).
 
 **Data Ownership:** Order, Order Item, Order Event, Price Snapshot.
 
@@ -255,23 +255,23 @@ ADR-0020 resolves the mismatch earlier drafts flagged between the DDD's entity-o
 
 **Responsibilities:** Owns payment state and settlement across mada, card, BNPL, cash-on-delivery, and card-on-delivery, and owns refund processing (ADR-0020). Is the Backend's sole caller of the external Payment Gateway (`02-context/system-context.md`).
 
-**Boundaries:** Does not decide whether an order is eligible for a refund on business grounds (that's a rule Order/support process evaluates before calling Payment) — Payment executes and records the financial transaction, it does not adjudicate business eligibility beyond the payment-state constraints the DDD already defines (e.g., a refund amount must use the order's price snapshot, not current catalog price). Does not initiate itself — Order calls Payment as a checkout step.
+**Boundaries:** Does not decide whether an order is eligible for a refund on business grounds. Per ADR-0033, Order owns automatic refund-eligibility rules derived from order state, cancellation reason, delivery failure, and substitution outcome; Support may initiate a refund request with a reason; Payment validates payment/refund constraints (e.g., a refund amount must use the order's price snapshot, not current catalog price) and executes only after eligibility is approved by Order or an authorized Support approval flow. Does not initiate itself — Order calls Payment as a checkout step.
 
-**Ownership:** Payment (DDD 5.24), Payment History (DDD 5.25), Cash Remittance (DDD 5.26), Card-on-Delivery Record (DDD 5.27), Refund (DDD 5.28, per ADR-0020).
+**Ownership:** Payment (DDD 5.24), Payment History (DDD 5.25), Cash Remittance (DDD 5.26), Card-on-Delivery Record (DDD 5.27), Refund (DDD 5.28, per ADR-0020, line-item aware and multi-partial-refund capable per ADR-0038), Payment Ledger (DDD 5.42, per ADR-0037 — the append-only record of every financial movement, structurally mirroring Inventory's Ledger).
 
-**Public Interfaces:** InitiatePayment, ConfirmPayment, RecordCashCollection, RecordCardOnDeliveryCollection, IssueRefund, GetPaymentStatus.
+**Public Interfaces:** InitiatePayment, ConfirmPayment, RecordCashCollection, RecordCardOnDeliveryCollection (per ADR-0035, now also the forwarding target for Order's `DeliveryCompletedWithPayment` handling), IssueRefund (per ADR-0038, accepts a per-line breakdown — Order Item references, quantity, and amount per line), GetPaymentStatus.
 
-**Dependencies:** Order (to validate the order/amount context a payment or refund applies to).
+**Dependencies:** Order (to validate the order/amount context a payment or refund applies to), Settings (read-only, for cross-cutting configuration — ADR-0033).
 
-**Forbidden Dependencies:** Cart, Catalog, Inventory, Delivery, Search, Promotion. Payment's job is settlement against an order it's told about; it has no legitimate reason to reach into any module upstream of Order.
+**Forbidden Dependencies:** Cart, Catalog, Inventory, Delivery, Search, Promotion. Payment's job is settlement against an order it's told about; it has no legitimate reason to reach into any module upstream of Order. This is unaffected by ADR-0035 — Delivery still never calls Payment; Order remains the sole forwarder.
 
-**Published Events:** `PaymentAuthorized`, `PaymentCaptured`, `PaymentFailed`, `RefundIssued`, `RefundFailed`, `CashRemittanceRecorded`.
+**Published Events:** `PaymentAuthorized`, `PaymentCaptured`, `PaymentFailed`, `RefundIssued`, `RefundFailed`, `CashRemittanceRecorded`, `PaymentLedgerRecorded` (per ADR-0037, mirroring `InventoryLedgerRecorded`).
 
 **Consumed Events:** `OrderPlaced` (informational only, e.g. for reconciliation views — payment *initiation* is a direct synchronous call from Order to `InitiatePayment`, not event-triggered; resolved in `module-communication.md` Section 7, per the DDD's Section 9.1 treatment of payment initialization as part of order-creation orchestration).
 
-**Data Ownership:** Payment, Payment History, Cash Remittance, Card-on-Delivery Record, Refund.
+**Data Ownership:** Payment, Payment History, Cash Remittance, Card-on-Delivery Record, Refund, Payment Ledger.
 
-**Future Expansion:** Terminal/POS settlement provider integration for card-on-delivery reconciliation remains an explicitly unresolved "Phase 1 spike" per the DDD and `02-context/system-context.md`; when resolved, it becomes a new external integration owned by Payment, not a new module.
+**Future Expansion:** Per ADR-0032/ADR-0033, MVP launch uses Payment-owned manual POS/card-on-delivery settlement import plus a discrepancy-review workflow; a terminal/POS provider settlement API becomes a new external integration owned by Payment once the terminal provider is confirmed, an optional enhancement rather than a launch blocker.
 
 ---
 
@@ -285,7 +285,7 @@ ADR-0020 resolves the mismatch earlier drafts flagged between the DDD's entity-o
 
 **Public Interfaces:** EvaluatePromotionEligibility, ApplyPromoCode, RecordPromotionUsage, GetActivePromotions.
 
-**Dependencies:** Catalog (to evaluate product/category-scoped promotion rules), User (to evaluate customer-scoped eligibility, e.g., first-order promotions).
+**Dependencies:** Catalog (to evaluate product/category-scoped promotion rules), User (to evaluate customer-scoped eligibility, e.g., first-order promotions), Settings (read-only, for cross-cutting configuration — ADR-0033).
 
 **Forbidden Dependencies:** Order, Cart, Payment, Inventory, Delivery. Promotion is a rules-and-eligibility service called by Order; it must never call back into Order or any downstream checkout module.
 
@@ -301,25 +301,27 @@ ADR-0020 resolves the mismatch earlier drafts flagged between the DDD's entity-o
 
 ### 4.11 Delivery
 
-**Responsibilities:** Owns in-store picking (ADR-0020) and rider-based delivery: picking session execution, delivery assignment to riders, and rider location tracking during active delivery.
+**Responsibilities:** Owns in-store picking (ADR-0020) and rider-based delivery: picking session execution, delivery assignment to riders, rider location tracking during active delivery, and — per ADR-0034 — grouping up to two (MVP) independent, same-store delivery assignments into a single rider trip (delivery batching) when configurable eligibility rules are met.
 
-**Boundaries:** Does not own the order itself — it acts on an order reaching a fulfillment-ready state (signaled by `OrderReadyForFulfillment`) and reports back via events (`PickingCompleted`, `DeliveryCompleted`) rather than writing to Order's tables. Does not own worker profile/capability/shift data — it reads that from User to determine eligible pickers/riders, through User's public interface.
+**Boundaries:** Does not own the order itself — it acts on an order reaching a fulfillment-ready state (signaled by `OrderReadyForFulfillment`) and reports back via events (`PickingCompleted`, `DeliveryCompleted`) rather than writing to Order's tables. Does not own worker profile/capability/shift data — it reads that from User to determine eligible pickers/riders, through User's public interface. Delivery batching does not change any of this: a batch is a Delivery-internal grouping of assignments Delivery already owns — it never becomes a second owner of order, payment, or inventory state, and Order remains unaware a batch exists (it still only sees `DeliveryAssigned`/`DeliveryCompleted`/`DeliveryFailed` per order).
 
-**Ownership:** Picking Session (DDD 5.20, per ADR-0020), Picking Session Item (DDD 5.21), Delivery Assignment (DDD 5.22), Rider Location (DDD 5.23).
+**Ownership:** Picking Session (DDD 5.20, per ADR-0020), Picking Session Item (DDD 5.21), Delivery Assignment (DDD 5.22, extended with an optional batch reference per ADR-0034), Rider Location (DDD 5.23), Delivery Batch (DDD 5.40, ADR-0034), Delivery Stop (DDD 5.41, ADR-0034).
 
-**Public Interfaces:** StartPickingSession, CompletePickingSession, AssignRider, RecordRiderLocation, CompleteDelivery, GetActiveAssignmentForRider.
+**Public Interfaces:** StartPickingSession, CompletePickingSession, AssignRider, RecordRiderLocation, CompleteDelivery, GetActiveAssignmentForRider, EvaluateBatchEligibility, CreateDeliveryBatch, AssignBatchToRider, RecalculateBatchRoute, GetActiveBatchForRider (the last five per ADR-0034).
 
-**Dependencies:** Order (to know which orders are ready for picking/delivery, and to report completion back), User (to resolve eligible/available pickers and riders), Store (to scope picking/delivery to the correct store).
+**COD/card-on-delivery collection (ADR-0035):** when a rider records a successful cash or card-on-delivery collection at drop-off (`CompleteDelivery`, carrying the collection fact), Delivery never calls Payment directly — it publishes `DeliveryCompletedWithPayment` (below) for Order to consume and forward through Payment's existing `RecordCashCollection`/`RecordCardOnDeliveryCollection` interface. Delivery's Forbidden Dependencies (below) are unaffected.
 
-**Forbidden Dependencies:** Payment, Cart, Catalog, Promotion, Search. Delivery's job is entirely about moving a physical order from shelf to customer; none of these modules have any legitimate role in that.
+**Dependencies:** Order (to know which orders are ready for picking/delivery, and to report completion back), User (to resolve eligible/available pickers and riders), Store (to scope picking/delivery to the correct store), Settings (read-only, for cross-cutting configuration, including batching eligibility thresholds — ADR-0033, ADR-0034). Batching introduces no new dependency — eligibility evaluation and batch formation are Delivery-internal operations over data it already owns or already reads.
 
-**Published Events:** `PickingStarted`, `PickingCompleted`, `DeliveryAssigned`, `DeliveryCompleted`, `RiderLocationUpdated`.
+**Forbidden Dependencies:** Payment, Cart, Catalog, Promotion, Search. Delivery's job is entirely about moving a physical order from shelf to customer; none of these modules have any legitimate role in that. This is unchanged by batching — a batch never needs to call Payment, Cart, Catalog, Promotion, or Search to form or execute.
+
+**Published Events:** `PickingStarted`, `PickingCompleted`, `DeliveryAssigned`, `DeliveryCompleted`, `RiderLocationUpdated`, `DeliveryFailed`, `DeliveryRejected` (the last two per ADR-0036), `DeliveryCompletedWithPayment` (per ADR-0035, raised alongside `DeliveryCompleted` only when the delivery included a cash/card-on-delivery collection), and — per ADR-0034 — `DeliveryBatchCreated`, `DriverAssignedToBatch`, `BatchRouteUpdated`, `BatchCompleted`, `BatchCancelled`.
 
 **Consumed Events:** `OrderReadyForFulfillment` (from Order).
 
-**Data Ownership:** Picking Session, Picking Session Item, Delivery Assignment, Rider Location.
+**Data Ownership:** Picking Session, Picking Session Item, Delivery Assignment, Rider Location, Delivery Batch, Delivery Stop.
 
-**Future Expansion:** DDD Section 17.4 ("Batch Delivery") is the named future-expansion driver. Rider Location's short-retention, PDPL-reviewed data (DDD Section 5.23) is a candidate for its own dedicated, time-series-optimized storage path if evidenced load ever justifies it — a `04-cross-cutting/technology-decisions.md`-level decision, not a module-boundary one.
+**Future Expansion:** DDD Section 17.4 ("Batch Delivery") is resolved by ADR-0034 as of this revision — MVP caps a batch at two orders; a larger batch size is a Settings-configuration change, not a module-boundary change. A future routing engine (SRD FR-BATCH-010) replacing the initial stop-sequencing approach is a Delivery-internal implementation change, not an architectural one, provided it doesn't introduce a new external or cross-module dependency. Rider Location's short-retention, PDPL-reviewed data (DDD Section 5.23) remains a candidate for its own dedicated, time-series-optimized storage path if evidenced load ever justifies it — a `04-cross-cutting/technology-decisions.md`-level decision, not a module-boundary one.
 
 ---
 
@@ -333,7 +335,7 @@ ADR-0020 resolves the mismatch earlier drafts flagged between the DDD's entity-o
 
 **Public Interfaces:** SendNotification, GetNotificationHistory, GetDeliveryStatus.
 
-**Dependencies:** None directly required to do its core job — it is driven by consumed events, not by synchronous calls from other modules, with one exception: Auth calls Notification directly to request OTP delivery, because that specific flow needs a synchronous "was the OTP dispatched" confirmation (Section 4.1's Dependencies).
+**Dependencies:** None directly required to do its core job — it is driven by consumed events, not by synchronous calls from other modules, with one exception: Auth calls Notification directly to request OTP delivery, because that specific flow needs a synchronous "was the OTP dispatched" confirmation (Section 4.1's Dependencies). Notification also reads Settings (read-only, for template/channel configuration — ADR-0033).
 
 **Forbidden Dependencies:** Order, Payment, Cart, Inventory, Delivery, Catalog, Promotion. Notification only ever reacts to events or Auth's direct OTP request; it never initiates a call into any business module.
 
@@ -381,7 +383,7 @@ ADR-0020 resolves the mismatch earlier drafts flagged between the DDD's entity-o
 
 **Public Interfaces:** GetReportRollup, GetAnalyticsSnapshot, TriggerRollupGeneration.
 
-**Dependencies:** None synchronously — Analytics is built entirely from consumed events and scheduled rollup generation (DDD Section 15.2, 15.7), never a direct call into another module's data.
+**Dependencies:** None synchronously required for its core job — Analytics is built entirely from consumed events and scheduled rollup generation (DDD Section 15.2, 15.7), never a direct call into another module's data. Analytics also reads Settings (read-only, for cross-cutting configuration — ADR-0033).
 
 **Forbidden Dependencies:** Every transactional module (Order, Payment, Cart, Inventory, Delivery). Analytics must never be on any business operation's critical path — nothing should ever wait on Analytics to respond for a checkout, payment, or delivery action to complete.
 
@@ -437,6 +439,8 @@ ADR-0020 resolves the mismatch earlier drafts flagged between the DDD's entity-o
 
 **Consumed Events:** None.
 
+**Readers:** Per ADR-0033, Auth, Notification, Order, Payment, Delivery, Inventory, Promotion, Store, and Analytics may read configuration through `GetSetting`/`ListSettingsForScope`; only Settings ever writes a setting (`UpdateSetting`). A reading module's own Dependencies field lists Settings; this does not make Settings dependent on them.
+
 **Data Ownership:** Settings.
 
 **Future Expansion:** As the number of configurable behaviors grows, Settings may need its own versioning/rollback model (DDD Section 5.36 already notes "Version/archive" for this entity) — an internal evolution, not a boundary change.
@@ -449,7 +453,7 @@ A quick-reference view of the sixteen modules and their DDD-entity grounding. Th
 
 | Module | Primary Entities Owned | Owns No Primary Data? |
 |---|---|---|
-| Auth | User (identity/credential record), Session, Refresh Token | No |
+| Auth | User (identity/credential record), Session, Refresh Token, Store Scope Assignment | No |
 | User | Customer Profile, Address, Worker Profile, Worker Capability, Shift, Worker Availability | No |
 | Store | Store, Service Zone | No |
 | Catalog | Category, Brand, Product, Product Image | No |
@@ -457,9 +461,9 @@ A quick-reference view of the sixteen modules and their DDD-entity grounding. Th
 | Inventory | Inventory Item, Inventory Reservation, Inventory Ledger | No |
 | Cart | Cart | No |
 | Order | Order, Order Item, Order Event, Price Snapshot | No |
-| Payment | Payment, Payment History, Cash Remittance, Card-on-Delivery Record, Refund | No |
+| Payment | Payment, Payment History, Cash Remittance, Card-on-Delivery Record, Refund, Payment Ledger | No |
 | Promotion | Promotion, Promo Code, Promotion Usage | No |
-| Delivery | Picking Session, Picking Session Item, Delivery Assignment, Rider Location | No |
+| Delivery | Picking Session, Picking Session Item, Delivery Assignment, Rider Location, Delivery Batch, Delivery Stop | No |
 | Notification | Notification | No |
 | Support | Support Ticket, Support Ticket Comment | No |
 | Analytics | Report Rollup, Analytics Snapshot | No (but rebuildable — see 4.13) |

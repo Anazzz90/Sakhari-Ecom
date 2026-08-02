@@ -1,7 +1,7 @@
 # 0010. Transactional checkout and inventory reservation
 
 **Decision ID:** ADR-0010
-**Status:** Accepted
+**Status:** Clarified by [0021](0021-checkout-transaction-boundary-clarification.md)
 **Date:** 2026-07-24
 **Deciders:** Principal Architect (solo-project decision authority)
 

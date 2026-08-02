@@ -3,7 +3,7 @@
 
 **Version:** 2.6
 **Date:** July 24, 2026
-**Status:** Draft
+**Status:** Approved for architecture implementation
 **Prepared For:** Solo, AI-assisted development
 **Supersedes:** `SRD_QuickCommerce.md` (v1.1, Flutter single-app), `SRS_Sakhari_ReactNative_QuickCommerce.md` (v1.0, RN three-app draft), and prior single-store/Twilio-assumption drafts of this document (v2.0–2.2)
 
@@ -249,6 +249,21 @@ Kafka, Debezium, ClickHouse (for now), ScyllaDB, Kubernetes/EKS, native Kotlin r
 - FR-RIDE-001–00X: Online/offline toggle; receive assignments from the rider's assigned store (FR-STORE-006); accept/reject within a timeout (auto-expire and reassign); navigate via deep link to Google Maps (no embedded navigation for MVP); background location sharing while online/on active delivery; OTP-based proof of delivery; card-on-delivery charge via handheld terminal where selected (FR-PAY-POS-001–004); earnings dashboard.
 - FR-RIDE-010: Rider arrival and delivery completion timestamps are captured for SLA reporting.
 - FR-RIDE-011: Rider can mark failed delivery only with a reason code and optional support note.
+
+#### 5.5.1 Delivery Batching (Multi-Order Assignment)
+
+Dispatch may assign a rider more than one packed order for a single trip when doing so improves operational efficiency without breaking any individual order's delivery promise. Batching is purely an operational grouping — each order's own placement, payment, inventory reservation, status, and audit history are entirely unaffected by whether it travels alone or as part of a batch (ADR-0034).
+
+- FR-BATCH-001: MVP supports a maximum of two active orders per delivery batch. A future version may raise this limit through configuration, not a requirements change.
+- FR-BATCH-002: A batch groups only orders from the same originating store.
+- FR-BATCH-003: Dispatch evaluates batching eligibility only among orders already in the packed/awaiting-rider state (Section 10.5) — batching never delays an order's own readiness.
+- FR-BATCH-004: Batching eligibility is evaluated against configurable business rules (Section 10.5.1) — proximity/travel-time between delivery locations, similarity of order readiness times, rider capacity, and estimated SLA headroom — not hardcoded thresholds.
+- FR-BATCH-005: The rider sees an ordered, optimized sequence of stops for a batch and completes each stop (OTP/proof, per FR-RIDE-*) exactly as they would a single delivery.
+- FR-BATCH-006: A rider may accept or reject a batch as a whole at assignment time; a rider may not accept only one stop of an offered batch.
+- FR-BATCH-007: If a customer cancels one order in an active batch, the batch continues with its remaining stop(s); the cancelled order's own cancellation flow (refund, inventory release) proceeds exactly as it would for a non-batched order.
+- FR-BATCH-008: If a rider becomes unavailable or rejects a batch, every stop in that batch returns to the store's rider pool for reassignment (individually or as a new batch), consistent with BR-020's single-order timeout/return rule.
+- FR-BATCH-009: A partial delivery failure (one stop fails, the other succeeds) does not affect the successful stop's completion or the failed stop's own failed-delivery handling (FR-RIDE-011).
+- FR-BATCH-010: Route stop order is optimized for the batch but is not a customer-facing guarantee beyond the existing per-order delivery SLA; the route may be recalculated mid-trip (e.g., after a stop's cancellation) without customer-visible disruption to the remaining stop(s).
 
 ### 5.6 Inventory Management
 
@@ -605,11 +620,11 @@ Business rules are numbered because they must be testable and visible in support
 - BR-014: OTP is required for normal delivery completion.
 - BR-015: Failed OTP validation requires support action or approved exception reason.
 - BR-016: Customer no-show creates a failed-delivery record and support follow-up.
-- BR-017: A rider cannot hold more than one active delivery unless batching is explicitly introduced later.
+- BR-017: A rider cannot hold more than one active delivery, or more than one active batch (Section 10.5.1), at a time; a batch itself is capped at two active orders for MVP (FR-BATCH-001).
 - BR-018: A picker cannot claim the same order twice or claim an order already claimed by another active picker session.
 - BR-019: Picker claim timeout returns the order to the same store queue.
 - BR-020: Rider assignment timeout returns the packed order to the same store rider pool.
-- BR-021: Automated cross-store rider reassignment is not allowed in MVP.
+- BR-021: Automated cross-store rider reassignment is not allowed in MVP. This applies identically to a batch — every stop in a batch shares one store, and reassignment (individual or re-batched) after a rejection/failure never crosses stores.
 - BR-022: Manual cross-store reassignment requires admin action and audit log.
 - BR-023: Worker must have an active shift before receiving picker/rider tasks.
 - BR-024: Worker cannot switch app mode while an active task is unresolved.
@@ -771,6 +786,29 @@ Business rules governing transitions:
 - Delivery cannot be completed without OTP or approved exception.
 - Failed delivery requires reason code and support visibility.
 
+This state machine is unchanged by delivery batching (Section 10.5.1): a batched assignment moves through exactly these same states, on its own, independent of the other assignment(s) sharing its trip. Batching adds a grouping reference only — it introduces no new state and no new transition to this table.
+
+#### 10.5.1 Delivery Batching Lifecycle and Eligibility Rules
+
+A Delivery Batch does not replace the Delivery Assignment State Machine above — it groups up to two (MVP, FR-BATCH-001) independent assignments for one rider trip. The batch itself has its own, simpler lifecycle:
+
+| Batch State | Purpose | Moved by / trigger |
+|---|---|---|
+| Forming | Candidate orders identified as potentially eligible to batch together. | Dispatch evaluation, triggered as orders become packed. |
+| Created | Eligible orders grouped; stop sequence assigned. | Dispatch confirms eligibility (rules below). |
+| Assigned | Rider offered and accepted the whole batch. | Rider acceptance. |
+| In Progress | Rider is completing stops in sequence. | First stop pickup/departure. |
+| Completed | Every stop reached a terminal state (Delivered or Cancelled/Failed at the assignment level). | Last stop's assignment reaches a terminal state. |
+| Cancelled | Batch dissolved before completion (e.g., rider rejected, or every stop cancelled before assignment). | Rider rejection, or all-stops-cancelled. |
+
+**Batching eligibility rules (configurable, not hardcoded — Settings-owned per ADR-0034):**
+- Same originating store (invariant, not configurable — a batch never spans stores, consistent with BR-021's store-scoped rider pool).
+- Delivery locations within a configurable distance/travel-time threshold of each other.
+- Order readiness times within a configurable tolerance window (so one order doesn't wait materially longer for its rider than it would un-batched).
+- Rider/driver capacity not exceeded (MVP: no more than FR-BATCH-001's configured maximum).
+- Estimated delivery SLA maintained for every order in the batch (Section 2's 10–20 minute delivery promise is never traded away for batching efficiency).
+- Compatible order types — reserved for future use; no order-type incompatibility flag exists in the current data model, so this rule evaluates as "always compatible" today and is documented only so a future incompatible-order-type flag (e.g., a handling constraint) has a rule already designed to enforce it.
+
 ### 10.6 Shift State Machine
 
 The Workforce Module owns shift state. Shifts define assignment eligibility and reconciliation windows.
@@ -839,6 +877,7 @@ Business rules governing transitions:
 - Refund cannot be processed without order/payment context and eligible amount.
 - Completed refunds are immutable except through corrective refund records.
 - Refund amount must use order price snapshots.
+- A refund identifies the specific order item(s) and quantities it corresponds to (line-item aware, ADR-0038); an order may have multiple partial refunds, provided their cumulative amount never exceeds the order's paid total.
 - Approval, rejection, cancellation, and completion require audit history.
 
 ### 10.9 Promotion Lifecycle
@@ -1405,12 +1444,12 @@ Sakhariapp/
 - ~~OQ-I: Supabase+Twilio for auth, or another option?~~ → **Neither** — auth built directly in NestJS+RDS to preserve PDPL residency (Supabase has no Middle East region); SMS/OTP switched to **Unifonic** since Twilio can't register Saudi domestic Sender IDs at all (§4.7).
 - ~~OQ-J: Database hosting — EC2 or another option?~~ → **Amazon RDS for PostgreSQL** in `me-central-2`, not self-managed Postgres on EC2 (§4.4).
 
-## 16. Remaining Open Questions
+## 16. Implementation Preconditions Closed by ARR
 
-None blocking at this point. Items to settle during Phase 1 execution rather than in this SRD:
-- Spot-check Google Maps geocoding/routing accuracy per-neighborhood in Sakaka before committing to the 10–20 min SLA publicly.
-- Confirm existing POS terminal provider/model (commonly Geidea in this market) and whether it exposes a settlement API for automated reconciliation (FR-PAY-POS-004) versus manual rider entry only.
-- Finalize which neighborhoods get a store at launch vs. fast-follow (Qara, Lakhayath, Khatib were named as examples — confirm the full initial list and each store's approximate coverage radius).
+The ARR converted the remaining Phase 1 ambiguities into implementation rules:
+- Google Maps client SDK may support address autocomplete, but backend geocoding validation and store/service-zone resolution are authoritative (ADR-0033). Sakaka neighborhood route spot-checks remain a launch operations task, not an architecture blocker.
+- Card-on-delivery is implemented with Payment-owned manual reconciliation and discrepancy review for MVP. POS provider settlement API integration is an optional enhancement once the terminal provider is confirmed, not a prerequisite for recording card-on-delivery correctly (ADR-0033).
+- Initial store/neighborhood radius values are launch configuration owned by Store/Service Zone. The architecture requires store-scoped routing and radius-based zones; exact radius values are operational data, not an unresolved architecture decision.
 
 ---
 

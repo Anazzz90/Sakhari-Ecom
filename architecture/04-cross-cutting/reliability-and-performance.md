@@ -29,7 +29,19 @@ Performance is pursued *within* the bounds correctness already sets (Principle 4
 - The transactional core fails **loudly and visibly**: a failed inventory reservation or payment initiation returns a clear failure to the caller, with Order's compensating action (`module-communication.md` Section 8) ensuring no inconsistent state is left behind. This is a deliberate choice — silently retrying or masking a failure here would risk exactly the correctness violations Principle 4.1 exists to prevent.
 - The asynchronous, consumer-tier side (Notification, Analytics, Audit's non-blocking path, Search's index) degrades **gracefully**: a delayed notification, a temporarily stale search index, or a backlog of unprocessed analytics events are recoverable inconveniences, not business-integrity failures, and are treated accordingly (`integration-and-messaging.md` Section 8's retry strategy is what recovers them, not a page-worthy incident by itself).
 
-**Exact numeric availability/latency targets** (an uptime percentage, a p95 latency budget for order placement) are not established in any prior document and are named in Open Decisions (Section 11) rather than invented here — this section establishes the allocation and failure-handling *philosophy*, which the eventual `nfr-matrix.md` should attach specific numbers to.
+**Numeric availability/latency targets (ADR-0031)**, applying this section's allocation philosophy:
+
+| Target | Value |
+|---|---|
+| Availability, transactional core | 99.9% monthly |
+| Availability, customer browse/search | 99.5% monthly |
+| Availability, notification/analytics consumer tier | 99.0% monthly |
+| API latency, general authenticated API | p95 <= 300 ms, p99 <= 800 ms, excluding external provider wait time |
+| Checkout orchestration API latency | p95 <= 1.5 s, p99 <= 3 s, excluding customer-side payment authorization time |
+| Catalog/search customer reads | p95 <= 300 ms, p99 <= 700 ms |
+| Rider location ingest | p95 <= 250 ms accepted by backend |
+
+These are launch targets for a single-region, modular-monolith MVP — not permanent enterprise SLAs — and are expected to tighten only with production evidence (ADR-0031's own Future Reconsideration Conditions), consistent with `06-quality-attributes/nfr-matrix.md`'s traceability of the same numbers.
 
 ## 4. Caching Strategy
 
@@ -100,8 +112,8 @@ The scalability endgame this entire document builds toward: because every module
 
 ## 13. Open Decisions
 
-- **Exact availability and latency targets** (uptime percentage, p95/p99 latency budgets for order placement and other key journeys) are not established anywhere in the approved documents — Section 3 sets the allocation and failure-handling philosophy; specific numbers belong to `06-quality-attributes/nfr-matrix.md` once authored.
 - **Specific horizontal-scaling and read-replica trigger thresholds** (what utilization or latency level actually justifies pulling that lever) are not decided — Section 11's "monitor before scaling" principle is established; the specific thresholds are not.
 - **Whether background-job scheduling (Section 7) is Redis-backed via a lightweight library or a more structured job-processing approach** is SDD-level detail, not decided here.
 - **Partitioning strategy specifics** (by what period, at what table-size threshold) for the append-only tables named in Section 9 are explicitly deferred in `data-architecture.md` and remain deferred here.
+- Exact availability and latency targets — previously open here — are resolved by ADR-0031 (Section 3 above) and must not be treated as open going forward.
 

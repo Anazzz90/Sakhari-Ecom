@@ -74,7 +74,7 @@ Catalog owns what a product *is* — globally, not per store (DDD §6.3: "Produc
 
 ### 9.5 Payment Ownership
 
-Payment owns the financial truth of every order — not just successful charges, but history, cash/card-on-delivery collection records, and refunds, all under one module because they are one connected financial narrative (DDD §6.6: "payment history is immutable; manual corrections are additive"). Order never holds its own copy of payment status beyond what Payment's published events (`PaymentAuthorized`, `PaymentCaptured`, `PaymentFailed`) tell it — Order's own order record reflects *that* payment succeeded or failed as order-lifecycle state, but the financial detail (amounts, gateway references, collection method) lives only in Payment's own tables.
+Payment owns the financial truth of every order — not just successful charges, but history, cash/card-on-delivery collection records, refunds, and (per ADR-0037) the append-only Payment Ledger, all under one module because they are one connected financial narrative (DDD §6.6: "payment history is immutable; manual corrections are additive"). Order never holds its own copy of payment status beyond what Payment's published events (`PaymentAuthorized`, `PaymentCaptured`, `PaymentFailed`) tell it — Order's own order record reflects *that* payment succeeded or failed as order-lifecycle state, but the financial detail (amounts, gateway references, collection method) lives only in Payment's own tables. Delivery-collected cash/card-on-delivery payments are no exception: Delivery never writes to Payment's tables, even for its own delivery's collection — it publishes `DeliveryCompletedWithPayment` (ADR-0035) for Order to forward to Payment's existing interface, preserving this same ownership boundary for the one payment path that originates outside Payment's own request/response cycle.
 
 ## 10. Event-Driven Data Sharing
 
@@ -96,12 +96,12 @@ Each module below is documented against the ten fields this task requires. "Owne
 
 | Field | Detail |
 |---|---|
-| **Owned Tables** | `users` (identity/credential record), `sessions`, `refresh_tokens` — the latter two Auth-internal, not separately named in the DDD (`module-catalog.md` §4.1) |
-| **Owned Entities** | User (DDD §5.1) — identity/credential fields only, not profile fields |
-| **Aggregate Roots** | User (root); Session and Refresh Token are dependent records scoped to a User, never independently meaningful |
+| **Owned Tables** | `users` (identity/credential record), `sessions`, `refresh_tokens`, `user_store_assignments` (per ADR-0041) — the latter three Auth-internal, not separately named in the DDD (`module-catalog.md` §4.1) |
+| **Owned Entities** | User (DDD §5.1) — identity/credential fields only, not profile fields — plus Store Scope Assignment (Auth-internal, ADR-0041) |
+| **Aggregate Roots** | User (root); Session, Refresh Token, and Store Scope Assignment are dependent records scoped to a User, never independently meaningful |
 | **Read Responsibilities** | Reads its own identity/session/token records to authenticate and validate every request |
-| **Write Responsibilities** | Sole writer of `users` (identity fields), `sessions`, `refresh_tokens` |
-| **Public Data Interfaces** | `ValidateToken` (returns identity/claims), `IssueTokenPair`, `RefreshAccessToken` — see `module-catalog.md` §4.1 |
+| **Write Responsibilities** | Sole writer of `users` (identity fields), `sessions`, `refresh_tokens`, `user_store_assignments` |
+| **Public Data Interfaces** | `ValidateToken` (returns identity/claims and, per ADR-0041, Assigned Stores), `IssueTokenPair`, `RefreshAccessToken`, `InitiateStepUpChallenge`/`VerifyStepUpChallenge` (ADR-0040) — see `module-catalog.md` §4.1 |
 | **Data Exposed Through Events** | `UserAuthenticated` (actor reference, timestamp), `OtpRequested` (actor reference), `SessionRevoked` (session/actor reference) — no credential material ever included |
 | **Data Exposed Through APIs** | Identity/claims only, via `ValidateToken`; never raw credential or token-signing material |
 | **Forbidden Data Access** | Never reads or writes Customer Profile, Address, or Worker data (User's tables) — Auth resolves identity, User resolves who that identity belongs to as a person |
@@ -216,13 +216,13 @@ Each module below is documented against the ten fields this task requires. "Owne
 
 | Field | Detail |
 |---|---|
-| **Owned Tables** | `payments`, `payment_history`, `cash_remittances`, `card_on_delivery_records`, `refunds` |
-| **Owned Entities** | Payment (DDD §5.24), Payment History (§5.25), Cash Remittance (§5.26), Card-on-Delivery Record (§5.27), Refund (§5.28, per ADR-0020) |
-| **Aggregate Roots** | Payment (root; Payment History and Refund are dependent children); Cash Remittance and Card-on-Delivery Record are related aggregates scoped to a shift/store and referencing Payment, not nested underneath it |
-| **Read Responsibilities** | Reads Order to validate the order/amount context a payment or refund applies to |
-| **Write Responsibilities** | Sole writer of all five owned tables |
-| **Public Data Interfaces** | `InitiatePayment`, `ConfirmPayment`, `IssueRefund`, `GetPaymentStatus` — see `module-catalog.md` §4.9 |
-| **Data Exposed Through Events** | `PaymentAuthorized`, `PaymentCaptured`, `PaymentFailed`, `RefundIssued`, `RefundFailed`, `CashRemittanceRecorded` — status and reference only, never raw gateway payloads (`data-architecture.md` Section 12's "do not store raw card data" applies identically to event payloads) |
+| **Owned Tables** | `payments`, `payment_history`, `cash_remittances`, `card_on_delivery_records`, `refunds`, `payment_ledger` (per ADR-0037) |
+| **Owned Entities** | Payment (DDD §5.24), Payment History (§5.25), Cash Remittance (§5.26), Card-on-Delivery Record (§5.27), Refund (§5.28, per ADR-0020, line-item aware per ADR-0038), Payment Ledger (§5.42, per ADR-0037) |
+| **Aggregate Roots** | Payment (root; Payment History and Refund are dependent children); Cash Remittance and Card-on-Delivery Record are related aggregates scoped to a shift/store and referencing Payment, not nested underneath it; Payment Ledger is an append-only history aggregate referencing Payment, structurally identical to Inventory Ledger's own role (Section 9.1) |
+| **Read Responsibilities** | Reads Order to validate the order/amount context a payment or refund applies to, including the Price Snapshot a line-item refund's Original Unit Price is derived from (ADR-0038) |
+| **Write Responsibilities** | Sole writer of all six owned tables, including every ledger entry |
+| **Public Data Interfaces** | `InitiatePayment`, `ConfirmPayment`, `RecordCashCollection`, `RecordCardOnDeliveryCollection` (per ADR-0035), `IssueRefund` (per ADR-0038, per-line breakdown), `GetPaymentStatus` — see `module-catalog.md` §4.9 |
+| **Data Exposed Through Events** | `PaymentAuthorized`, `PaymentCaptured`, `PaymentFailed`, `RefundIssued`, `RefundFailed`, `CashRemittanceRecorded`, `PaymentLedgerRecorded` (ADR-0037) — status and reference only, never raw gateway payloads (`data-architecture.md` Section 12's "do not store raw card data" applies identically to event payloads) |
 | **Data Exposed Through APIs** | Payment/refund status and history for the owning order, or an authorized staff/finance caller |
 | **Forbidden Data Access** | Never reads or writes Order's own tables directly, Cart, Catalog, Inventory, or Promotion tables — settlement against a told-to context, never a reader of upstream modules |
 | **Future Extensibility** | Terminal/POS settlement provider integration extends this same ownership boundary once resolved (Section 9.5) |
@@ -246,16 +246,16 @@ Each module below is documented against the ten fields this task requires. "Owne
 
 | Field | Detail |
 |---|---|
-| **Owned Tables** | `picking_sessions`, `picking_session_items`, `delivery_assignments`, `rider_locations` |
-| **Owned Entities** | Picking Session (DDD §5.20, per ADR-0020), Picking Session Item (§5.21), Delivery Assignment (§5.22), Rider Location (§5.23) |
-| **Aggregate Roots** | Two distinct aggregates within one module: Picking Session (root; Picking Session Item is a dependent child) for the in-store half, and Delivery Assignment (root; Rider Location is a related, time-series tracking record referencing an assignment) for the last-mile half |
-| **Read Responsibilities** | Reads Order for fulfillment-readiness signals, User for eligible pickers/riders, Store for scope |
-| **Write Responsibilities** | Sole writer of all four owned tables |
-| **Public Data Interfaces** | `StartPickingSession`, `AssignRider`, `RecordRiderLocation`, `GetActiveAssignmentForRider` — see `module-catalog.md` §4.11 |
-| **Data Exposed Through Events** | `PickingStarted`, `PickingCompleted`, `DeliveryAssigned`, `DeliveryCompleted`, `RiderLocationUpdated` — task/assignment references and status, never full location history in one event |
-| **Data Exposed Through APIs** | Active assignment detail for the assigned rider/picker; delivery status for the owning customer |
-| **Forbidden Data Access** | Never reads or writes Order's own tables directly (reports back via events only), Payment, Catalog, or Promotion tables |
-| **Future Extensibility** | Batch delivery (DDD §17.4) extends this same ownership boundary; Rider Location's short-retention data is a candidate for a dedicated storage path (a technology, not ownership, decision) |
+| **Owned Tables** | `picking_sessions`, `picking_session_items`, `delivery_assignments`, `rider_locations`, `delivery_batches`, `delivery_stops` (last two per ADR-0034) |
+| **Owned Entities** | Picking Session (DDD §5.20, per ADR-0020), Picking Session Item (§5.21), Delivery Assignment (§5.22, extended with an optional batch reference), Rider Location (§5.23), Delivery Batch (§5.40, ADR-0034), Delivery Stop (§5.41, ADR-0034) |
+| **Aggregate Roots** | Three aggregates within one module: Picking Session (root; Picking Session Item is a dependent child) for the in-store half; Delivery Assignment (root; Rider Location is a related, time-series tracking record referencing an assignment) for the per-order last-mile half; and Delivery Batch (root; Delivery Stop is a dependent child) for the operational grouping layer, which references but never subsumes Delivery Assignment — a stop is a pointer with a sequence number, not a copy of the assignment it points to |
+| **Read Responsibilities** | Reads Order for fulfillment-readiness signals, User for eligible pickers/riders, Store for scope, Settings for batching-eligibility thresholds (ADR-0033, ADR-0034) |
+| **Write Responsibilities** | Sole writer of all six owned tables — Delivery Batch and Delivery Stop are exactly as exclusively Delivery-owned as the pre-existing four; no other module ever writes to them |
+| **Public Data Interfaces** | `StartPickingSession`, `AssignRider`, `RecordRiderLocation`, `GetActiveAssignmentForRider`, `CreateDeliveryBatch`, `AssignBatchToRider`, `GetActiveBatchForRider` — see `module-catalog.md` §4.11 |
+| **Data Exposed Through Events** | `PickingStarted`, `PickingCompleted`, `DeliveryAssigned`, `DeliveryCompleted`, `RiderLocationUpdated`, `DeliveryFailed`, `DeliveryRejected` (ADR-0036), `DeliveryCompletedWithPayment` (ADR-0035 — collection amount/method/reference only, never written to Delivery's own tables), `DeliveryBatchCreated`, `DriverAssignedToBatch`, `BatchRouteUpdated`, `BatchCompleted`, `BatchCancelled` — task/assignment/batch references and status, never full location history or another module's data in one event |
+| **Data Exposed Through APIs** | Active assignment detail for the assigned rider/picker; delivery status for the owning customer; active batch/stop sequence for the assigned rider only — never exposed to, or attributed to, the customer as a single combined entity, since each customer's own order and delivery status remain individually reported |
+| **Forbidden Data Access** | Never reads or writes Order's own tables directly (reports back via events only), Payment, Catalog, or Promotion tables. Delivery Batch/Stop formation never reads or writes Payment or Inventory tables either — eligibility evaluation uses only data Delivery already owns or already reads (Order readiness signal, Store scope, Settings thresholds) |
+| **Future Extensibility** | Batch delivery (DDD §17.4) is resolved by ADR-0034 within this same ownership boundary — a larger batch size is a Settings-configuration change, not a new table or a new owner. Rider Location's short-retention data remains a candidate for a dedicated storage path (a technology, not ownership, decision) |
 
 ### 12.12 Notification
 
@@ -324,7 +324,7 @@ Each module below is documented against the ten fields this task requires. "Owne
 | **Owned Tables** | `settings` |
 | **Owned Entities** | Settings (DDD §5.36) |
 | **Aggregate Roots** | Settings (root and sole entity) |
-| **Read Responsibilities** | None declared from other modules — see Section 15's Open Decision |
+| **Read Responsibilities** | Per ADR-0033, read by Auth, Notification, Order, Payment, Delivery, Inventory, Promotion, Store, and Analytics (`module-catalog.md` §4.16's Readers field) |
 | **Write Responsibilities** | Sole writer of `settings` |
 | **Public Data Interfaces** | `GetSetting`, `UpdateSetting`, `ListSettingsForScope` — see `module-catalog.md` §4.16 |
 | **Data Exposed Through Events** | `SettingChanged` — setting key/scope reference only |
@@ -357,11 +357,13 @@ Every owned entity in the system, in one table. "Who may read" and "who may modi
 | Payment / Payment History | Payment | Order, Support | Payment only | Interface / Event |
 | Cash Remittance / Card-on-Delivery Record | Payment | — (finance/reporting context via Payment) | Payment only | Interface |
 | Refund | Payment | Order, Support | Payment only | Interface / Event |
+| Payment Ledger (ADR-0037) | Payment | — (internal history) | Payment only | — (internal) |
 | Promotion / Promo Code | Promotion | Order | Promotion only | Interface |
 | Promotion Usage | Promotion | — (internal history) | Promotion only | Event (consumed: `OrderCancelled`) |
 | Picking Session / Picking Session Item | Delivery | Order (via events) | Delivery only | Event |
-| Delivery Assignment | Delivery | Order (via events), Support | Delivery only | Event / Interface |
+| Delivery Assignment | Delivery | Order (via events — including `DeliveryFailed`/`DeliveryRejected`, ADR-0036), Support | Delivery only | Event / Interface |
 | Rider Location | Delivery | — (operational only) | Delivery only | Interface |
+| Delivery Batch / Delivery Stop (ADR-0034) | Delivery | — (operational only; Order remains unaware a batch exists) | Delivery only | Event |
 | Notification | Notification | — (self-service history only) | Notification only | Interface |
 | Support Ticket / Support Ticket Comment | Support | — (self-service/staff via Support) | Support only | Interface |
 | Report Rollup / Analytics Snapshot | Analytics | Admin/Ops Dashboard callers (RBAC-gated) | Analytics only | Interface (Derived) |
@@ -411,7 +413,6 @@ Every owned entity in the system, in one table. "Who may read" and "who may modi
 
 ## 18. Open Decisions
 
-- **Settings' readers are not declared anywhere.** No module's Dependencies field in `module-catalog.md`, nor its Downstream Dependencies in `capability-boundary-map.md`, names Settings — carried forward from `capability-boundary-map.md` Section 8 and restated here specifically because this document's Ownership Matrix (Section 13) would otherwise have to guess. It does not guess; the matrix records "not explicitly declared" rather than inventing a reader list.
-- **Refund eligibility's decision owner** (Order vs. Support vs. both) remains open, carried from `capability-boundary-map.md` Section 8 — it does not change this document's ownership assignment (Payment owns `refunds` regardless of who decides eligibility), but it does mean Section 13's "Who May Modify" for Refund via Support is a live possibility, not a certainty, until that ambiguity is resolved.
-- **Whether Auth's Session/Refresh Token state should be modeled as PostgreSQL tables or Redis-backed state** is not settled by any prior document — `module-catalog.md` calls them "Auth-internal, not separately named in the DDD," and `data-architecture.md` doesn't name them explicitly either. This document lists them as conceptual tables under Section 2's PostgreSQL-ownership philosophy for consistency, but flags that a Redis-backed implementation (consistent with Section 3's Redis-for-sessions framing) is equally plausible and not precluded — an SDD-level decision, not resolved here.
 - **Cash Remittance and Card-on-Delivery Record's exact reader population** (which finance/reporting role, specifically, may read them) is not enumerated in any prior document beyond "finance reports depend on this entity" (DDD §5.26) — Section 13 leaves this general rather than inventing specific role names not established in `security-and-compliance.md`'s permission model.
+- Settings' readers, refund eligibility's decision owner, and Auth's Session/Refresh Token storage (PostgreSQL, authoritative, per ADR-0033) — all previously open here — are resolved by ADR-0033 and must not be treated as open going forward.
+- The delivery-collected-payment data path, the Payment Ledger's existence, line-item refund structure, and Auth's Store Scope Assignment ownership — all previously open (identified by the 2026-07-30 Architecture Readiness Review) — are resolved by ADR-0035, ADR-0037, ADR-0038, and ADR-0041 respectively and must not be treated as open going forward.

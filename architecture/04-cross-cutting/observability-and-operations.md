@@ -32,7 +32,7 @@
 - **Correlation IDs.** Every request entering the system is assigned a correlation ID at the boundary (the controller layer — `service-decomposition.md` Section 7's Thin Controllers), propagated through every module and event that participates in fulfilling it. This exists so a single customer-facing action (place an order) that fans out across Order, Inventory, Payment, and eventually Delivery and Notification can be traced as one story across module boundaries, without which a solo developer would have to manually correlate timestamps across sixteen modules' worth of independent logs.
 - **Request tracing.** The correlation ID is what request tracing is built on — the ability to reconstruct, after the fact, the full sequence of synchronous calls and asynchronous events a single request triggered (`module-communication.md` Section 10's worked checkout example is exactly the kind of flow tracing must be able to reconstruct). This is diagnostic infrastructure, not a business record — it complements but never substitutes for Order Event history or the Audit Log.
 - **Audit logs.** Distinct from application logs by design (`security-and-compliance.md` Section 9; `data-architecture.md` Section 15) — the Audit Log is immutable, retained long-term, and answers "who did what and was it allowed," while application logs are disposable, retained short-term, and answer "what was the system doing at this moment." This document's logging strategy governs application logs only; the Audit Log's own strategy is `data-architecture.md` Section 15 and `security-and-compliance.md` Section 9's subject.
-- **Security logs.** Authentication events (successful and failed OTP verification, session issuance/revocation), authorization denials (an RBAC check that failed), and access to sensitive data are logged with enough context to detect a pattern (repeated failed authentication, unusual administrative access) without duplicating the Audit Log's role — a security log is an operational early-warning signal; the Audit Log is the durable record of what was actually authorized to happen.
+- **Security logs.** Authentication events (successful and failed OTP verification, session issuance/revocation), OTP abuse-protection triggers (rate-limit and lockout events, per ADR-0039), step-up authentication attempts (per ADR-0040), authorization denials (an RBAC permission or store-scope check that failed, per ADR-0041), and access to sensitive data are logged with enough context to detect a pattern (repeated failed authentication, unusual administrative access) without duplicating the Audit Log's role — a security log is an operational early-warning signal; the Audit Log is the durable record of what was actually authorized to happen.
 
 ## 4. Monitoring
 
@@ -57,6 +57,8 @@ Each metric exists to answer a specific operational question, organized by which
 | Cache hit ratio | Is Redis actually accelerating reads, or is the cache layer providing no benefit (`data-architecture.md` Section 3)? | System / Application |
 | Database performance | Is PostgreSQL — the sole source of truth for everything — within its normal operating envelope (`data-architecture.md` Section 2)? | System |
 | Background job success | Are the scheduled jobs (`integration-and-messaging.md` Section 6 — reservation expiry, reconciliation, rollup generation) actually completing, since their failure is often silent otherwise? | Application |
+| Batch formation rate / orders-per-batch (ADR-0034) | Is delivery batching actually improving rider trip efficiency, or are eligible orders going unbatched (an operational-efficiency question, not a correctness one — a batching miss never blocks or delays an order)? | Business |
+| Batch-to-individual delivery SLA delta (ADR-0034) | Is a batched order's own delivery time still within its individual SLA (SRD Section 2's 10–20 minute promise), or is batching quietly eroding the promise it's supposed to only optimize around? | Business |
 
 **Why this specific set:** each metric maps to a named architectural concern elsewhere in this documentation set — none is included for generic completeness. A metric with no corresponding "why would this number matter" is exactly the kind of unactionable observability Section 2 rules out.
 
@@ -79,6 +81,18 @@ Calibrated to a single operator (Section 2) — the goal is the fewest alerts th
 
 **Escalation principles:** severity is assigned by *business consequence*, not by which module or layer is technically involved — a Critical alert is Critical because checkout is broken, not because "Order" sounds important. An alert that doesn't clearly map to one of these four tiers is a signal the alert itself needs redesigning, not that a fifth tier is needed. Nothing escalates automatically to a second on-call, because there is only one — escalation in this system means "this alert's own severity was wrong and needs recalibrating," a distinct, evolving practice as real incidents provide evidence (Section 2's "calibrated to one operator").
 
+**Initial numeric thresholds (ADR-0031)**, tuned against real production data rather than treated as permanent:
+
+| Signal | Threshold | Severity |
+|---|---|---|
+| Checkout success rate | Below 95% for 10 minutes, excluding customer payment declines | Critical |
+| Payment provider technical failure rate | Above 5% for 10 minutes | High |
+| Payment provider technical failure rate | Above 15% for 10 minutes | Critical |
+| Event outbox backlog (checkout/fulfillment/payment events) | Oldest pending event > 5 minutes | High |
+| Event outbox backlog (checkout/fulfillment/payment events) | Oldest pending event > 15 minutes | Critical |
+| General authenticated API latency | p95 > 300 ms or p99 > 800 ms, excluding external provider wait time | High |
+| Checkout orchestration API latency | p95 > 1.5 s or p99 > 3 s, excluding customer-side payment authorization time | High |
+
 ## 8. Incident Response
 
 Five phases, deliberately lightweight and solo-appropriate rather than a multi-role enterprise process:
@@ -91,22 +105,23 @@ Five phases, deliberately lightweight and solo-appropriate rather than a multi-r
 
 ## 9. Backup Strategy
 
-`infrastructure-and-release.md` Section 9 already establishes the mechanism — automated, managed PostgreSQL backups with point-in-time recovery, and S3's own durability guarantees for object storage — not repeated here. This document's operational layer on top of that mechanism: a backup that has never been verified restorable is not actually a backup, only an assumption. Operationally, this means periodic restore verification is a required practice (not merely a passive assumption that automated backups are working), and that the Inventory Ledger and Audit Log's own append-only, immutable design (`data-architecture.md` Sections 8, 15) serve as an operational cross-check — even a successful restore should reconcile against them, not be trusted blindly.
+`infrastructure-and-release.md` Section 9 already establishes the mechanism — automated, managed PostgreSQL backups with point-in-time recovery (35-day retention), and S3's own durability guarantees for object storage — not repeated here. This document's operational layer on top of that mechanism: a backup that has never been verified restorable is not actually a backup, only an assumption. Per ADR-0030/ADR-0031, restore verification runs **monthly during launch stabilization, quarterly once operations are stable** — a required, scheduled practice, not a passive assumption that automated backups are working — and the Inventory Ledger, Payment Ledger (`data-architecture.md` Section 8A, ADR-0037), and Audit Log's own append-only, immutable design (`data-architecture.md` Sections 8, 8A, 15) serve as an operational cross-check — even a successful restore should reconcile against them, not be trusted blindly.
 
 ## 10. Disaster Recovery
 
-`infrastructure-and-release.md` Section 10 already establishes the approach (restore from managed backup to the most recent recoverable point; single-region deployment made safe by disciplined backup practice rather than multi-region redundancy — appropriate at current scale, Constitution Section 6/13). This document's operational addition: a disaster-recovery scenario is not just "restore the database" — it is restoring the *whole* operational picture, including confirming which in-flight orders, reservations, and payments were affected and require explicit reconciliation (leaning on Section 9's ledger/audit cross-check) rather than assuming a clean restore automatically means a clean business state. The specific scope of disaster scenarios this system is expected to tolerate (a regional outage, specifically) remains `infrastructure-and-release.md`'s own Open Decision, not resolved here.
+`infrastructure-and-release.md` Section 10 already establishes the approach (restore from managed backup to the most recent recoverable point; single-region deployment made safe by disciplined backup practice rather than multi-region redundancy — appropriate at current scale, Constitution Section 6/13). This document's operational addition: a disaster-recovery scenario is not just "restore the database" — it is restoring the *whole* operational picture, including confirming which in-flight orders, reservations, and payments were affected and require explicit reconciliation (leaning on Section 9's ledger/audit cross-check) rather than assuming a clean restore automatically means a clean business state. Per ADR-0031, a regional outage is explicitly out of scope for MVP launch — single-region deployment is the accepted trade-off; multi-region disaster recovery is reconsidered only under sustained, evidenced pressure, not planned speculatively.
 
 ## 11. Recovery Objectives
 
-Recovery Point Objective (RPO — how much data loss is tolerable) and Recovery Time Objective (RTO — how much downtime is tolerable) are properties that differ by data class, not one number for the whole system:
+Recovery Point Objective (RPO — how much data loss is tolerable) and Recovery Time Objective (RTO — how much downtime is tolerable) are properties that differ by data class, not one number for the whole system. Per ADR-0031, the launch targets are:
 
-- **Transactional core data** (Orders, Payments, Inventory) demands the tightest RPO — this is exactly the data Principle 4.1 and ADR-0009/0021's transactional guarantees exist to protect, and PostgreSQL's own point-in-time recovery (`infrastructure-and-release.md` Section 9) is the mechanism that keeps RPO close to zero for anything already committed.
+- **Transactional core data** (Orders, Payments, Inventory): RPO <= 5 minutes, database RTO <= 4 hours — this is exactly the data Principle 4.1 and ADR-0009/0021's transactional guarantees exist to protect, and PostgreSQL's own point-in-time recovery (`infrastructure-and-release.md` Section 9) is the mechanism that keeps RPO within that bound for anything already committed.
+- **Backend service (compute):** RTO <= 60 minutes to restore service, independent of database restore time.
 - **Derived/rebuildable data** (Search's index, Analytics' rollups) has an effectively unbounded RPO/RTO in the sense that it can be rebuilt from source events (`data-architecture.md` Section 11) rather than restored from backup at all — its "recovery" is really regeneration, on its own timeline, with no business consequence to it taking longer.
 - **Cache and session data** (Redis) has no meaningful RPO by design (Principle 4.3) — its loss is a performance event, not a recovery event.
-- **Audit and ledger data** demands the same tight RPO as the transactional core, for the same reason Section 9 treats it as a cross-check rather than optional: an unrecoverable audit trail defeats the compliance and diagnostic purpose it exists for (`security-and-compliance.md` Section 9).
+- **Audit and ledger data** demands the same <= 5 minute RPO as the transactional core, for the same reason Section 9 treats it as a cross-check rather than optional: an unrecoverable audit trail defeats the compliance and diagnostic purpose it exists for (`security-and-compliance.md` Section 9).
 
-**Exact numeric RPO/RTO targets** (a specific number of minutes or hours per data class) are not established in any prior document — `infrastructure-and-release.md` Section 14 already names this as an open point, deliberately not asserted without a documented basis. This document establishes the *framework* (which data classes need which kind of guarantee, and why) rather than inventing numbers; see Section 17.
+These are launch targets, tightened only with production evidence through a future ADR (ADR-0031's own Future Reconsideration Conditions) — not permanent enterprise SLAs.
 
 ## 12. Operational Runbooks
 
@@ -147,8 +162,7 @@ Before a module or feature is considered ready for Production traffic:
 
 ## 17. Open Decisions
 
-- **Exact numeric RPO/RTO targets per data class** (Section 11) — not established anywhere; this document provides the framework, `infrastructure-and-release.md` Section 14 already names the specific numbers as open, and both remain open together.
-- **Exact alert thresholds** (what specific latency, error rate, or queue-size number triggers each severity in Section 7) are not decided — Section 7 establishes the tiers and their meaning; specific numbers are expected to be set and tuned against real production data, per Section 8's postmortem practice.
-- **Specific monitoring/logging/alerting tooling** is explicitly out of scope per this task's own instruction — this document describes what must be observed and why, not which vendor or platform observes it; `infrastructure-and-release.md` Section 14 already names this as open.
+- **Specific monitoring/logging/alerting tooling** (vendor or platform choice) remains undecided — this document describes what must be observed and why and, per Section 7, the initial numeric thresholds, but not which product implements the alerting pipeline.
 - **Maintenance-window communication mechanics** (how far in advance, through which channel) for the rare case Section 13 describes are not decided — an operational-procedure detail below this document's architectural altitude.
-- **Restore-verification cadence** (Section 9 — how often a backup restore is actually tested) is not decided — a frequency is an operational parameter to be set once real backup volume and risk tolerance are better understood, not asserted here without a documented basis.
+- Numeric RPO/RTO targets, initial alert thresholds, and restore-verification cadence — previously open here — are resolved by ADR-0031 (Sections 7, 9–11 above) and must not be treated as open going forward; they remain subject to tightening via a future ADR once production evidence accumulates.
+- OTP abuse-protection and step-up-authentication security-log content (Section 3 above) — previously undocumented, identified by the 2026-07-30 Architecture Readiness Review — is resolved by ADR-0039 and ADR-0040 and must not be treated as open going forward.
